@@ -1,4 +1,4 @@
-# Research Runner 0.2.0 MVP
+# Research Runner 0.2.1 MVP
 
 A single-host runner for bounded agent jobs. **Codex runs on the host by default**,
 using the operator's normal login and session store. A payload supplies its brief,
@@ -66,10 +66,18 @@ its original result; a deliberate resume uses a new key under the same deadline.
 `finalize JOB_ID --key KEY --apply` requests wrap-up; `stop` forces immediate stop.
 Monitoring never implicitly steers or resumes work.
 
-Packages allow 512 archive entries, 32 MiB/file and 128 MiB total, with deterministic
-hashes and strict extraction. Large dataset storage, scheduling, automatic retries
-and automatic continuation are unsupported. Capability discovery reports the
+Packages allow 512 archive entries, 8 GiB per input file and 64 GiB total
+uncompressed, with deterministic hashes and strict extraction. External dataset
+references, scheduling, automatic retries and automatic continuation are unsupported. Capability discovery reports the
 limits of the running service.
+
+Include the objects of research and their required dependencies in the package.
+Assembly, verification, upload and extraction stream file contents; input size does
+not determine RAM use. The operator can set `RESEARCH_RUNNER_INPUT_FILE_BYTES`
+and `RESEARCH_RUNNER_INPUT_TOTAL_BYTES` (positive integer bytes, total >= file) on
+both producer and server to change input quotas. `/api/capabilities` advertises the
+server quotas. Allow disk space for the upload, sealed archive and extracted inputs.
+Output publication remains limited to 32 MiB per file and 128 MiB per generation.
 
 ## Lifecycles and dependency tools
 

@@ -51,3 +51,50 @@ def test_actual_http_receipts_status_and_verified_collection(tmp_path,server):
  assert result['verified']
  assert json.loads((tmp_path/'collected/outputs/result.json').read_text())['outcome']=='complete'
  assert json.loads((tmp_path/'submission.json').read_text())['id']==jid
+
+
+def test_large_self_contained_package_streams_through_real_http(tmp_path, server, monkeypatch):
+ """One input exceeds both old quotas, without payload-sized Python reads."""
+ import shutil
+ from runner.package import deploy, hash_file, verify
+ source=tmp_path/'payload'
+ shutil.copytree(Path(__file__).resolve().parents[1]/'sample-mvp',source)
+ manifest=json.loads((source/'manifest.json').read_text())
+ manifest['inputs'].append('inputs/research-object.bin')
+ (source/'manifest.json').write_text(json.dumps(manifest))
+ research_object=source/'inputs/research-object.bin'
+ size=129*1024*1024
+ with research_object.open('wb') as out:out.truncate(size)
+ expected=hash_file(research_object)
+ import tarfile
+ original_read=tarfile.ExFileObject.read
+ def bounded_read(self,size=-1):
+  assert 0<=size<=1024*1024+1, 'unbounded archive member read'
+  return original_read(self,size)
+ monkeypatch.setattr(tarfile.ExFileObject,'read',bounded_read)
+ def forbidden(*args,**kwargs):raise AssertionError('whole-file read forbidden')
+ monkeypatch.setattr(Path,'read_bytes',forbidden)
+ archive=tmp_path/'large.rrpkg'
+ package_hash=assemble(source,archive)
+ _,inventory=verify(archive)
+ assert inventory['inputs/research-object.bin']=={'size':size,'sha256':expected}
+ deploy(archive,tmp_path/'extracted')
+ assert hash_file(tmp_path/'extracted/inputs/research-object.bin')==expected
+ control,_=server
+ caps=control.request('/api/capabilities')
+ assert caps['limits']['file_bytes']>=size
+ assert caps['limits']['output_file_bytes']==32*1024*1024
+ receipt=control.submit(archive,'large-object',tmp_path/'large-receipt.json',True)
+ assert receipt['package_sha256']==package_hash
+ job=tmp_path/'state/jobs'/receipt['id']
+ assert hash_file(job/'work/inputs/research-object.bin')==expected
+ assert (job/'work/inputs/research-object.bin').stat().st_size==size
+ assert control.submit(archive,'large-object',tmp_path/'large-receipt.json',True)['id']==receipt['id']
+
+ # Recovery archives also contain the sealed package and its extracted object.
+ from runner.service import Service
+ service=Service(tmp_path/'snapshot-state')
+ jid,_=service.submit(archive,'snapshot-large')
+ snapshot=service.snapshot(jid,tmp_path/'snapshot.tar.gz')
+ restored=Service.restore(snapshot,tmp_path/'restored')
+ assert hash_file(restored/'jobs'/jid/'work/inputs/research-object.bin')==expected

@@ -5,6 +5,30 @@ from .protocol import Policy, is_mvp
 MAX_FILE = 32 * 1024 * 1024
 MAX_TOTAL = 128 * 1024 * 1024
 MAX_FILES = 512
+# Input quotas are independent of frequently published output artifacts.
+INPUT_MAX_FILE = int(os.getenv('RESEARCH_RUNNER_INPUT_FILE_BYTES', 8 * 1024**3))
+INPUT_MAX_TOTAL = int(os.getenv('RESEARCH_RUNNER_INPUT_TOTAL_BYTES', 64 * 1024**3))
+if INPUT_MAX_FILE <= 0 or INPUT_MAX_TOTAL < INPUT_MAX_FILE:
+    raise ValueError('input limits require 0 < file bytes <= total bytes')
+MAX_ARCHIVE = INPUT_MAX_TOTAL + INPUT_MAX_TOTAL // 100 + 1024**2
+CHUNK = 1024 * 1024
+ENVELOPE_MAX = 1024 * 1024
+
+
+def hash_file(path):
+    with open(path, 'rb') as source:
+        return hashlib.file_digest(source, 'sha256').hexdigest()
+
+
+def _copy_hash(source, target=None):
+    h = hashlib.sha256()
+    size = 0
+    while chunk := source.read(CHUNK):
+        h.update(chunk)
+        size += len(chunk)
+        if target is not None:
+            target.write(chunk)
+    return h.hexdigest(), size
 
 
 def digest(data): return hashlib.sha256(data).hexdigest()
@@ -53,60 +77,104 @@ def declared(m): return [m['brief'],m['agents']]+m['skills']+m['inputs']
 
 
 def assemble(src, dest):
-    src=pathlib.Path(src).resolve(); m=validate_manifest(json.loads((src/'manifest.json').read_text()))
+    src=pathlib.Path(src).resolve(); dest=pathlib.Path(dest).resolve()
+    if dest.is_relative_to(src): raise ValueError('archive must be outside payload directory')
+    m=validate_manifest(json.loads((src/'manifest.json').read_text()))
     expected=set(declared(m))|{'manifest.json'}
     actual=set()
     for p in src.rglob('*'):
         rp=p.relative_to(src).as_posix()
         if p.is_symlink(): raise ValueError('links forbidden')
         if p.is_file(): actual.add(rp)
+        elif not p.is_dir(): raise ValueError('special input forbidden')
     if actual != expected: raise ValueError(f'undeclared or missing payloads: {sorted(actual ^ expected)}')
-    files={}
+    if len(declared(m))+1>MAX_FILES: raise ValueError('too many entries')
+    files={};total=0
     for name in sorted(declared(m)):
         p=src/name
         if not p.is_file() or p.is_symlink() or not p.resolve().is_relative_to(src): raise ValueError('unsafe input')
-        data=p.read_bytes()
-        if len(data)>MAX_FILE: raise ValueError('oversize file')
-        files[name]=data
-    if sum(map(len,files.values()))>MAX_TOTAL: raise ValueError('oversize package')
-    envelope={'manifest':m,'sha256':{n:digest(d) for n,d in files.items()}}
-    files['package.json']=json.dumps(envelope,sort_keys=True,separators=(',',':')).encode()
-    if len(files)>MAX_FILES or sum(map(len,files.values()))>MAX_TOTAL: raise ValueError('package limits exceeded')
-    dest=pathlib.Path(dest); dest.parent.mkdir(parents=True,exist_ok=True)
-    with dest.open('wb') as out, gzip.GzipFile(fileobj=out,mode='wb',filename='',mtime=0,compresslevel=6) as gz, tarfile.open(fileobj=gz,mode='w') as t:
-        for name,data in sorted(files.items()):
-            info=tarfile.TarInfo(name); info.size=len(data);info.mtime=0;info.uid=info.gid=0;info.uname=info.gname='';info.mode=0o644
-            t.addfile(info,io.BytesIO(data))
-    return digest(dest.read_bytes())
+        size=p.stat().st_size
+        if size>INPUT_MAX_FILE: raise ValueError('oversize input file')
+        total+=size
+        if total>INPUT_MAX_TOTAL: raise ValueError('oversize package')
+        files[name]={'size':size,'sha256':hash_file(p)}
+    envelope={'manifest':m,'sha256':{n:d['sha256'] for n,d in files.items()}}
+    data=json.dumps(envelope,sort_keys=True,separators=(',',':')).encode()
+    if len(data)>ENVELOPE_MAX or total+len(data)>INPUT_MAX_TOTAL: raise ValueError('package limits exceeded')
+    dest.parent.mkdir(parents=True,exist_ok=True)
+    # Publish only a fully written, verified archive.
+    import tempfile
+    fd, temporary=tempfile.mkstemp(dir=dest.parent,suffix='.rrpkg.tmp')
+    os.close(fd)
+    try:
+        with open(temporary,'wb') as out, gzip.GzipFile(fileobj=out,mode='wb',filename='',mtime=0,compresslevel=6) as gz, tarfile.open(fileobj=gz,mode='w|') as t:
+            for name,meta in [('package.json',{'size':len(data)})]+list(sorted(files.items())):
+                info=tarfile.TarInfo(name);info.size=meta['size'];info.mode=0o644
+                if name=='package.json': t.addfile(info,io.BytesIO(data))
+                else:
+                    with (src/name).open('rb') as source: t.addfile(info,source)
+        verify(temporary)
+        os.replace(temporary,dest)
+    finally:
+        pathlib.Path(temporary).unlink(missing_ok=True)
+    return hash_file(dest)
 
 
-def verify(archive):
-    files={};total=0
-    with tarfile.open(archive,'r:gz') as t:
+def _scan(archive, root=None):
+    files={};total=0;meta=None
+    if pathlib.Path(archive).stat().st_size>MAX_ARCHIVE: raise ValueError('compressed archive too large')
+    with tarfile.open(archive,'r|gz') as t:
+        seen=set()
         for count,x in enumerate(t,1):
             if count>MAX_FILES: raise ValueError('too many entries')
             name=relpath(x.name)
-            if not x.isfile() or name in files or x.size>MAX_FILE: raise ValueError('unsafe archive member')
-            total+=x.size
-            if total>MAX_TOTAL: raise ValueError('archive too large')
+            limit=ENVELOPE_MAX if name=='package.json' else INPUT_MAX_FILE
+            if not x.isfile() or name in seen or x.size<0 or x.size>limit: raise ValueError('unsafe archive member')
+            # Prevent overlapping paths from turning extraction into a file/directory conflict.
+            if any(name.startswith(n+'/') or n.startswith(name+'/') for n in seen): raise ValueError('overlapping archive paths')
+            seen.add(name);total+=x.size
+            if total>INPUT_MAX_TOTAL: raise ValueError('archive too large')
             f=t.extractfile(x)
             if f is None: raise ValueError('missing body')
-            files[name]=f.read(MAX_FILE+1)
-    meta=json.loads(files.pop('package.json'))
+            if name=='package.json':
+                meta=json.loads(f.read(ENVELOPE_MAX+1))
+                continue
+            if root is None:
+                sha,size=_copy_hash(f)
+            else:
+                p=root/name;p.parent.mkdir(parents=True,exist_ok=True)
+                with p.open('xb') as out: sha,size=_copy_hash(f,out)
+            if size!=x.size: raise ValueError('truncated body')
+            files[name]={'sha256':sha,'size':size}
+    if meta is None: raise ValueError('missing package.json')
     m=validate_manifest(meta['manifest'])
     if set(files)!=set(declared(m)) or set(meta['sha256'])!=set(files): raise ValueError('payload mismatch')
-    if any(digest(b)!=meta['sha256'][n] for n,b in files.items()): raise ValueError('hash mismatch')
+    if any(d['sha256']!=meta['sha256'][n] for n,d in files.items()): raise ValueError('hash mismatch')
     return m,files
 
 
+def verify(archive):
+    """Stream validation; return manifest and payload hash/size inventory."""
+    return _scan(archive)
+
+
+def read_manifest(archive):
+    """Read the envelope of an already verified sealed archive without hashing inputs."""
+    with tarfile.open(archive,'r|gz') as t:
+        for x in t:
+            if x.name=='package.json':
+                if not x.isfile() or x.size>ENVELOPE_MAX: raise ValueError('invalid envelope')
+                return validate_manifest(json.loads(t.extractfile(x).read(ENVELOPE_MAX+1))['manifest'])
+    raise ValueError('missing package.json')
+
+
 def deploy(archive,root):
-    m,files=verify(archive);root=pathlib.Path(root)
+    root=pathlib.Path(root)
     if root.exists(): raise FileExistsError(root)
     root.mkdir(parents=True)
     try:
-        for n,b in files.items():
-            p=root/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(b)
-        (root/'package.json').write_text(json.dumps({'manifest':m,'sha256':{n:digest(b) for n,b in files.items()}},sort_keys=True))
+        m,files=_scan(archive,root)
+        (root/'package.json').write_text(json.dumps({'manifest':m,'sha256':{n:d['sha256'] for n,d in files.items()}},sort_keys=True))
         (root/'outputs').mkdir(exist_ok=True)
     except BaseException:
         shutil.rmtree(root);raise

@@ -57,13 +57,15 @@ def is_mvp(manifest):
 
 
 def capabilities():
+    from .package import INPUT_MAX_FILE, INPUT_MAX_TOTAL, MAX_ARCHIVE, MAX_FILE, MAX_TOTAL, MAX_FILES
     return {
-        'format': 'runner-capabilities/v1', 'version': '0.2.0',
+        'format': 'runner-capabilities/v1', 'version': '0.2.1',
         'package_formats': ['research-package/v1', 'research-package/v2'],
         'adapters': ['fixture', 'codex'], 'max_running_jobs': 1,
         'default_engine': 'host', 'execution_engines': ['host', 'docker'],
-        'limits': {'file_bytes': 32 * 1024 * 1024, 'package_bytes': 128 * 1024 * 1024,
-                   'files': 512, 'contract_bytes': 65536},
+        'limits': {'file_bytes': INPUT_MAX_FILE, 'package_bytes': INPUT_MAX_TOTAL,
+                   'archive_bytes': MAX_ARCHIVE, 'files': MAX_FILES, 'contract_bytes': 65536,
+                   'output_file_bytes': MAX_FILE, 'output_total_bytes': MAX_TOTAL},
         'features': {'bounded_runs': True, 'graceful_finalize': True,
                      'worker_deadline_failsafe': True,
                      'container_auth_file_projection': True, 'container_auth_refresh_qualified': False,

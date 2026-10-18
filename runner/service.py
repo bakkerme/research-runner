@@ -13,7 +13,7 @@ import time
 import uuid
 
 from .files import read_file
-from .package import MAX_FILE, MAX_FILES, MAX_TOTAL, declared, deploy, digest, relpath, verify
+from .package import MAX_FILE, MAX_FILES, MAX_TOTAL, declared, deploy, digest, relpath, read_manifest, hash_file, MAX_ARCHIVE
 from .protocol import Checkpoint, Result, is_mvp, load_contract
 from .store import ACTIVE, Store
 
@@ -81,14 +81,14 @@ class Service:
 
  def manifest(self,jid):
   # Runtime workspaces are writable; the sealed original is authoritative.
-  return verify(self.path(jid)/'package.rrpkg')[0]
+  return read_manifest(self.path(jid)/'package.rrpkg')
 
  def submit(self,archive,key):
-  m,_=verify(archive);jid=uuid.uuid4().hex;path=self.path(jid);path.mkdir(parents=True,exist_ok=False)
+  jid=uuid.uuid4().hex;path=self.path(jid);path.mkdir(parents=True,exist_ok=False)
   try:
-   shutil.copyfile(archive,path/'package.rrpkg');deploy(archive,path/'work')
+   shutil.copyfile(archive,path/'package.rrpkg');m=deploy(path/'package.rrpkg',path/'work')
    for name in ('session','requests','inbox'):(path/name).mkdir()
-   actual,created=self.store.submit(jid,m['name'],m['adapter'],key,digest(pathlib.Path(archive).read_bytes()))
+   actual,created=self.store.submit(jid,m['name'],m['adapter'],key,hash_file(path/'package.rrpkg'))
    if not created:shutil.rmtree(path)
    return actual,created
   except BaseException:
@@ -382,7 +382,7 @@ class Service:
   with tarfile.open(archive,'r:gz') as t:
    for item in t:
     name=relpath(item.name);count+=1;total+=item.size
-    if count>2000 or total>1024*1024*1024 or item.size>128*1024*1024 or not (item.isfile() or item.isdir()):raise ValueError('unsafe snapshot')
+    if count>2000 or total>2*MAX_ARCHIVE+1024**3 or item.size>MAX_ARCHIVE or not (item.isfile() or item.isdir()):raise ValueError('unsafe snapshot')
     if name!='state.sqlite3' and name!='jobs' and not name.startswith('jobs/'):raise ValueError('unexpected snapshot member')
     target=root/name
     if item.isdir():target.mkdir(parents=True,exist_ok=True)

@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import FastAPI,Header,HTTPException,Query,Request
 from fastapi.responses import HTMLResponse,JSONResponse,Response,StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 from .service import Service
 
 class Control(BaseModel):
@@ -25,7 +26,7 @@ function openJob(id){if(es)es.close();current=id;seen=0;lastState=null;document.
 
 def app(root,engine='host',image='research-runner-worker:0.2.0'):
  from .protocol import capabilities,schemas
- from .package import digest,MAX_TOTAL
+ from .package import hash_file,MAX_ARCHIVE
  import secrets
  read_token=os.getenv('RESEARCH_RUNNER_READ_TOKEN');control_token=os.getenv('RESEARCH_RUNNER_CONTROL_TOKEN')
  if bool(read_token)!=bool(control_token) or (read_token and read_token==control_token):
@@ -88,15 +89,17 @@ def app(root,engine='host',image='research-runner-worker:0.2.0'):
   return {'generation':data['generation'] if data else None,'checkpoint':data['checkpoint'] if data else None}
  @a.post('/api/jobs')
  async def submit(request: Request,idempotency_key:str=Header(...,min_length=1,max_length=200)):
-  data=bytearray()
-  async for chunk in request.stream():
-   data.extend(chunk)
-   if len(data)>MAX_TOTAL:raise HTTPException(413,'package too large')
-  with tempfile.NamedTemporaryFile(suffix='.rrpkg') as f:
-   f.write(data);f.flush()
-   try:jid,created=svc.submit(f.name,idempotency_key)
+  with tempfile.NamedTemporaryFile(suffix='.rrpkg',dir=svc.root) as f:
+   size=0
+   async for chunk in request.stream():
+    size+=len(chunk)
+    if size>MAX_ARCHIVE:raise HTTPException(413,'package too large')
+    await run_in_threadpool(f.write,chunk)
+   await run_in_threadpool(f.flush)
+   package_sha256=await run_in_threadpool(hash_file,f.name)
+   try:jid,created=await run_in_threadpool(svc.submit,f.name,idempotency_key)
    except Exception as e:raise HTTPException(400,str(e))
-  return {'format':'runner-submission/v1','id':jid,'created':created,'package_sha256':digest(data),'api_url':str(request.base_url).rstrip('/')+'/api/jobs/'+jid,'dashboard_url':str(request.base_url)}
+  return {'format':'runner-submission/v1','id':jid,'created':created,'package_sha256':package_sha256,'api_url':str(request.base_url).rstrip('/')+'/api/jobs/'+jid,'dashboard_url':str(request.base_url)}
  @a.post('/api/jobs/{jid}/{action}')
  def control(jid,action,body:Control,idempotency_key:str=Header(...,min_length=1,max_length=200)):
   try:

@@ -50,17 +50,29 @@ results and workload-specific context can be ordinary declared inputs; the MVP
 imposes no domain plan schema or directory convention. Preserve their dependency
 paths. Package input paths cannot be `package.json` or under `outputs/`.
 
-Limits: 512 archive entries, 32 MiB/file, 128 MiB total uncompressed bytes including
-the envelope. Links, traversal, duplicates, special files and undeclared payloads
-are rejected. Larger input sets must be scoped down explicitly; dataset references
-are unsupported. Preparation must report exclusions rather than silently drop
-required dependencies. Credentials never belong in packages.
+Input limits: 512 archive entries, 8 GiB/file, 64 GiB total uncompressed bytes
+including the envelope (maximum 1 MiB). Override input byte quotas with
+`RESEARCH_RUNNER_INPUT_FILE_BYTES` and `RESEARCH_RUNNER_INPUT_TOTAL_BYTES` on the
+producer and server. Both must be positive integers and total must be >= file.
+Capabilities report `file_bytes`, `package_bytes` and `archive_bytes` (compressed
+upload cap, including headroom for gzip/tar overhead).
+
+Include research objects and dependencies as declared inputs. Assembly, upload,
+verification and extraction stream contents with bounded memory; upload processing
+runs outside the API event loop so monitoring stays available. Allow disk space
+for the temporary upload, sealed archive and extracted inputs. Links, traversal,
+duplicates, special files and undeclared payloads are rejected. Inputs exceeding
+configured quotas require an explicit quota increase or an explicit scope decision;
+dataset references are unsupported. Preparation must report exclusions rather
+than silently drop required dependencies. Credentials never belong in packages.
 
 V2 requires `outputs/result.json` and `outputs/handoff.md` in `required_outputs`.
 List additional required outputs for full completion. Partial/blocked closeout
 may omit those additional files, but must retain useful work and explain gaps.
-All regular files under `outputs/` are eligible for publication within the same
-count/byte limits. Do not put sensitive runtime state there.
+All regular files under `outputs/` are eligible for publication within output
+limits of 512 files, 32 MiB/file and 128 MiB per generation. Capabilities report
+these separately as `output_file_bytes` and `output_total_bytes`. Do not put
+sensitive runtime state there.
 
 ## Worker files
 
