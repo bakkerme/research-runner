@@ -1,29 +1,30 @@
 # Research Runner MVP contract (0.2.0)
 
-This is the implemented workload-agnostic interface. The runner executes one
-job at a time on one host. Codex runs natively on that host by default; optional
-containers isolate workload tools, independently of agent execution. Producers supply their own scope, instructions,
-inputs and acceptance criteria. The runner checks protocol and file integrity;
-it does not establish the correctness of workload conclusions.
+The runner executes one job at a time on one host. Codex runs natively by
+default. Workloads can use containers for dependency tools independently of agent
+execution. Producers supply scope, instructions, inputs and acceptance criteria.
+The runner checks protocol and file integrity; it does not establish the
+correctness of workload conclusions.
 
-## Included and deferred
+## Supported scope
 
-Included: deterministic packages, hash verification, idempotent submission and
-launch, persistent events and deadlines, graceful finalization requests, voluntary
+The runner provides deterministic packages, hash verification, idempotent
+submission and launch, persistent events and deadlines, graceful finalization requests, voluntary
 complete/partial/blocked outcomes, live checkpoint/artifact generations, bounded
 HTTP monitoring, dashboard controls and verified remote collection.
 
-Deferred: large external datasets, arbitrary runtime plugins, worker scheduling,
-external worker brokers, provider retries/automatic continuation, automatic domain
-validators, budget extensions and distributed/concurrent execution. A completed
-Codex turn must produce closeout files; the MVP does not keep prompting it.
+Large external datasets, arbitrary runtime plugins, worker scheduling, external
+worker brokers, provider retries, automatic continuation, domain validators,
+budget extensions and distributed/concurrent execution are unsupported.
+A completed Codex turn must produce closeout files; the MVP does not keep
+prompting it.
 `GET /api/capabilities` reports supported package versions, features and limits.
 
 ## Package
 
-Use `research-package/v2` for MVP lifecycle features. V1 packages retain their
-legacy hard attempt timeout and `completed` state. V2 adds exactly one top-level
-`policy` object to the existing manifest:
+Use `research-package/v2` for persistent run budgets and structured outcomes.
+`research-package/v1` uses a per-attempt timeout and the `completed` state.
+V2 includes a top-level `policy` object:
 
 ```json
 {
@@ -36,12 +37,12 @@ legacy hard attempt timeout and `completed` state. V2 adds exactly one top-level
 Total wall-time allowance is `resources.time_seconds` (maximum 86400).
 Require `0 < termination_seconds < finalization_seconds < time_seconds`.
 Checkpoint interval must be 0.1..300 seconds. Policy is frozen at submission.
-Other manifest fields remain: `format`, `name`, `adapter`, `runtime`, `brief`,
+The other manifest fields are: `format`, `name`, `adapter`, `runtime`, `brief`,
 `agents`, `skills`, `inputs`, `resources`, `required_outputs`. Adapters are
 `codex` and deterministic `fixture`. The runtime SDK version is pinned. Native
-payloads need no image fields. An explicit containerized-agent deployment additionally
-requires a pinned image and image_id pair. The
-[example manifest](../sample-mvp/manifest.json) is directly assemblable for native execution.
+payloads need no image fields. Containerized agents require a pinned `image` and
+`image_id` pair. The [example manifest](../sample-mvp/manifest.json) targets native
+execution.
 
 Every package file must be declared. Brief, agent instructions, skills and inputs
 are hashed in the `package.json` envelope. Plan, provenance inventory, previous
@@ -114,9 +115,9 @@ including outages/approval waits; queued time does not. Resume cannot reset the
 allowance. Expired jobs require a deliberate new submission with a new key.
 
 At `start + budget - finalization_seconds`, enter `finalizing`, expire pending
-approvals, reject steering and write the job control directory's `finalize.json` with reason,
-attempt and hard deadline. The worker checks between operations; the Codex adapter
-also attempts to steer the active turn with wrap-up instructions and declines new
+approvals, reject steering and write `finalize.json` in the job control directory,
+including the reason, attempt and hard deadline. The worker checks between
+operations; the Codex adapter also attempts to steer the active turn with wrap-up instructions and declines new
 approval requests. The dashboard's Finish up action requests the same transition
 with `user_requested`. An acknowledgement means signal delivery, not proven task
 completion. Final results must respect that reason or report no actionable work.
@@ -134,17 +135,17 @@ outage cannot grant the worker indefinite runtime. It cannot produce a graceful
 closeout when the model is unresponsive.
 
 Execution states: `queued`, `running`, `finalizing`, `finished`, `interrupted`,
-`failed` (plus historical v1 states). `finished` means protocol-valid normal
-closeout, not necessarily complete scope. Outcome claim is independently
-`complete`, `partial`, `blocked`, or null for failed/interrupted/legacy jobs.
+`failed`. V1 also uses `completed` and `waiting`. `finished` means a protocol-valid
+normal closeout, not necessarily complete scope. Outcome claim is independently
+`complete`, `partial`, `blocked`, or null for failed, interrupted or v1 jobs.
 Validation is explicitly `not_run`; workload checks and review remain external.
 A forced deadline produces `interrupted`, with no fabricated outcome.
 
 Restart kills owned orphan workers before marking active attempts interrupted.
 Resume creates a new process/turn under the same deadline and session. Original
-artifacts remain published. Old terminal result files are retained outside the
-workspace before a retry, preventing accidental reuse. No side effect should be
-replayed until the checkpoint and actual outputs have been reconciled.
+artifacts remain published. Before a retry, the preceding terminal result is
+retained outside the workspace to prevent accidental reuse. No side effect
+should be replayed until the checkpoint and actual outputs have been reconciled.
 
 ## Monitoring, authorization and artifacts
 
@@ -172,7 +173,7 @@ Set distinct `RESEARCH_RUNNER_READ_TOKEN` and `RESEARCH_RUNNER_CONTROL_TOKEN` on
 the server to enforce read/control separation. Configure both or neither.
 Clients send Authorization Bearer using `RESEARCH_RUNNER_TOKEN`; dashboard sign-in
 uses an HttpOnly SameSite cookie. Without tokens the trusted network has full
-control, matching legacy behavior. No public-interface authentication is assumed.
+control. No public-interface authentication is assumed.
 Read credentials cannot mutate jobs. Decisions expose the requested details and
 are tied to exact attempt/turn/request identity; stale decisions expire.
 
@@ -212,10 +213,10 @@ A separate explicit --engine docker mode can containerize the agent itself. That
 alternative requires an image pin and separate credential provisioning; its
 restrictions are not requirements for ordinary payloads. Native mode needs no
 credential projection or Docker installation. Once a job starts, its execution
-engine is recorded and cannot silently change on resume. Historical jobs with an
-unknown engine require operator care and their original runtime/session store.
+engine is recorded and cannot silently change on resume. Jobs whose execution
+engine is unspecified must resume with their original runtime and session store.
 
 The Codex adapter uses the SDK's streaming/steering interface; see the
 [official app-server documentation](https://learn.chatgpt.com/docs/app-server).
-Fixtures qualify controller behavior. Live native recovery and finalization must
-be qualified on the target host using its actual Codex executable and account.
+Use `tools/qualify_host.py` to verify native recovery and finalization on the
+execution host with its configured Codex executable and account.

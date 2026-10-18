@@ -8,9 +8,8 @@ running the agent.
 
 The runner provides repeatable packages, a human dashboard and agent HTTP API,
 checkpoints, deadline wrap-up, complete/partial/blocked outcomes and hash-verified
-collection. Start with the [MVP contract](docs/job-runner-spec.md),
-[producer-agent handoff](docs/producer-agent-handoff.md) and
-[host checklist](docs/implementation-readiness.md).
+collection. The [package and API contract](docs/job-runner-spec.md) defines the
+interface for workload producers and monitoring clients.
 
 ## Install and serve
 
@@ -69,7 +68,8 @@ Monitoring never implicitly steers or resumes work.
 
 Packages allow 512 archive entries, 32 MiB/file and 128 MiB total, with deterministic
 hashes and strict extraction. Large dataset storage, scheduling, automatic retries
-and automatic continuation are deferred. Discovery reports these limits.
+and automatic continuation are unsupported. Capability discovery reports the
+limits of the running service.
 
 ## Lifecycles and dependency tools
 
@@ -83,7 +83,7 @@ Agents can finish early when no allowed path remains. Required closeout files ar
 recommended. See [schemas](schemas/result.json) or `research-runner schemas`.
 `finished` means protocol-valid closeout, with a separate complete/partial/blocked
 claim. Validation is `not_run`; workload-specific checks/review are payload work.
-V1 keeps historical completed behavior.
+V1 jobs use the `completed` execution state.
 
 Workload tooling may invoke Docker/Podman for dependencies using normal host
 permissions. It must preflight its engine, pin its tool images, record ownership,
@@ -113,7 +113,7 @@ sessions remain in the operator's CODEX_HOME and are not bundled.** Same-host
 recovery uses the stored thread ID; cross-host session migration is not advertised.
 Do not export the host's whole Codex home or credentials to make a snapshot portable.
 
-## Qualification
+## Tests and host verification
 
 ```sh
 .venv/bin/pytest -q
@@ -123,9 +123,10 @@ Do not export the host's whole Codex home or credentials to make a snapshot port
 
 The probe defaults to native execution, needs no Docker, owns a fresh private state
 and tests deadlines, blocked finish, real model session recall after controller death,
-finalize steering and collection. See [readiness](docs/implementation-readiness.md)
-and the [DGX evidence](docs/dgx-qualification.md). Fixture tests alone do not prove
-live model compliance. Optional browser checks use `RR_BROWSER_TEST=1` and
+finalize steering and collection. Run it with the same user, Codex executable
+and CODEX_HOME as the service. Its output contains private session context and
+belongs outside Git. The probe stops only its own controller and agent processes.
+Optional browser checks use `RR_BROWSER_TEST=1` and
 `RR_BROWSER_EXECUTABLE=/path/to/chrome` after installing `.[browser]`.
 
 ## Optional containerized agent
@@ -135,9 +136,10 @@ It requires a built worker image and runtime image/tag digest in the package.
 The Dockerfile and v1 samples remain available for that mode. Build on the target
 architecture using an appropriate wheelhouse; rootless mapping and read-only inputs
 apply there. The optional `RESEARCH_RUNNER_CODEX_AUTH_FILE` setting projects an
-existing auth cache read-only; long-run refresh in that mode is not qualified.
+existing auth cache read-only, so the agent cannot persist refreshed credentials
+to that file.
 Native execution does not use that setting. No Docker socket is mounted into
 containerized agents. Do not infer support for nested workload containers.
 
 Do not commit private state, credentials, generated packages, test outputs or
-workload assets. The existing DGX service is not automatically upgraded by a probe.
+workload assets.
