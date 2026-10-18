@@ -98,3 +98,32 @@ def test_large_self_contained_package_streams_through_real_http(tmp_path, server
  snapshot=service.snapshot(jid,tmp_path/'snapshot.tar.gz')
  restored=Service.restore(snapshot,tmp_path/'restored')
  assert hash_file(restored/'jobs'/jid/'work/inputs/research-object.bin')==expected
+
+
+def test_controller_shutdown_with_open_event_stream_releases_lock(tmp_path):
+ """An open dashboard SSE connection must not prevent controller recovery."""
+ import urllib.request
+ from runner.service import Service
+ with socket.socket() as sock:
+  sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+ root=tmp_path/'shutdown-state';url=f'http://127.0.0.1:{port}'
+ log=(tmp_path/'shutdown.log').open('w')
+ proc=subprocess.Popen([sys.executable,'-m','runner.cli','--state',str(root),'serve','--host','127.0.0.1','--port',str(port)],stdout=subprocess.DEVNULL,stderr=log)
+ stream=None
+ try:
+  client=Client(url)
+  for _ in range(100):
+   try:client.request('/api/capabilities');break
+   except OSError:time.sleep(.025)
+  archive=tmp_path/'shutdown.rrpkg';assemble(Path(__file__).resolve().parents[1]/'sample-mvp',archive)
+  jid=client.submit(archive,'shutdown',tmp_path/'receipt.json',True)['id']
+  stream=urllib.request.urlopen(url+f'/api/jobs/{jid}/events',timeout=5)
+  assert stream.readline().startswith(b'id:')
+  import signal
+  proc.terminate();assert proc.wait(timeout=9) in (0,-signal.SIGTERM)
+  log.flush();assert 'Finished server process' in (tmp_path/'shutdown.log').read_text()
+  replacement=Service(root);replacement._owner.close()
+ finally:
+  if stream:stream.close()
+  if proc.poll() is None:proc.kill();proc.wait(timeout=5)
+  log.close()

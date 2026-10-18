@@ -14,15 +14,7 @@ class Control(BaseModel):
  turn_id: str|None=None
  decision: str|None=None
 
-PAGE='''<!doctype html><html><head><meta charset="utf-8"><title>Research Runner</title><style>body{font:15px system-ui;margin:2rem;max-width:1100px}button,input{padding:.5rem;margin:.25rem}nav{display:flex;gap:2rem}section{border:1px solid #ccc;padding:1rem;margin:1rem 0}pre{white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;background:#f6f6f6;padding:1rem}.row{cursor:pointer;border-bottom:1px solid #ddd;padding:.5rem} .state{font-weight:bold}</style></head><body><h1>Research Runner</h1><p>Local single host research jobs</p><section><input id="token" type="password" placeholder="Access token (if configured)"><button onclick="login()">Sign in</button></section><section><input id="pkg" type="file" accept=".rrpkg"><button onclick="submit()">Submit</button></section><nav><section style="min-width:250px"><h2>Jobs</h2><div id="jobs"></div></section><section style="flex:1"><h2 id="title">Select a job</h2><div id="status"></div><div id="controls"></div><h3>Progress and tools</h3><pre id="events"></pre><h3>Findings</h3><div id="findings"></div><h3>Artifacts</h3><div id="artifacts"></div></section></nav><script>
-let current=null,seen=0,es=null,lastState=null;const key=()=>{if(typeof crypto.randomUUID==='function')return crypto.randomUUID();const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;const hex=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;};const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function api(path,opt={}){let r=await fetch(path,opt);let b=await r.json();if(!r.ok)throw Error(b.detail||r.status);return b}
-async function login(){try{let r=await fetch('/api/session',{method:'POST',headers:{'Authorization':'Bearer '+document.querySelector('#token').value}});if(!r.ok)throw Error('Sign-in failed');document.querySelector('#token').value='';await refresh()}catch(e){alert(e.message)}}
-async function refresh(){let jobs=await api('/api/jobs');document.querySelector('#jobs').innerHTML=jobs.map(j=>`<div class="row" onclick="openJob('${j.id}')">${esc(j.name)} <span class="state">${j.state}</span><br><small>${j.id}</small></div>`).join('');if(current){let j=jobs.find(x=>x.id===current);if(j){document.querySelector('#title').textContent=j.name+' · '+j.state;let s=await api(`/api/jobs/${current}/status`);document.querySelector('#status').textContent=(s.outcome?'Outcome: '+s.outcome+' · ':'')+(s.remaining_seconds===null?'':'Budget remaining: '+Math.ceil(s.remaining_seconds)+'s · ')+(s.finalize_reason||'')+' · Validation: '+s.validation;if(lastState!==j.state){lastState=j.state;document.querySelector('#controls').innerHTML=`<button onclick="act('start')" ${['queued','waiting','interrupted','failed'].includes(j.state)?'':'disabled'}>Start/resume</button><button onclick="act('stop')" ${['running','finalizing'].includes(j.state)?'':'disabled'}>Stop</button><button onclick="act('finalize')" ${j.state==='running'?'':'disabled'}>Finish up</button><input id="input" placeholder="Continuation input" ${j.state==='running'?'':'disabled'}><button onclick="act('input')" ${j.state==='running'?'':'disabled'}>Send input</button>`}}}}
-async function submit(){let f=document.querySelector('#pkg').files[0];if(!f)return;try{let r=await api('/api/jobs',{method:'POST',headers:{'Idempotency-Key':key()},body:f});await refresh();openJob(r.id)}catch(e){alert(e.message)}}
-async function act(action){if(!current)return;let input=document.querySelector('#input').value;try{await api(`/api/jobs/${current}/${action}`,{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':key()},body:JSON.stringify({input})});await refresh()}catch(e){alert(e.message)}}
-function render(e){let d=e.data;if(e.kind==='approval_request'){let p=document.createElement('p');p.id='approval-'+d.id;p.textContent='Approval requested: '+d.method+' · attempt '+d.attempt+' · turn '+d.turn_id+' '+JSON.stringify(d.details||{})+' ';for(let choice of ['accept','decline']){let b=document.createElement('button');b.textContent=choice;b.onclick=()=>decide(d,choice);p.append(b)}document.querySelector('#controls').append(p)}else if(e.kind==='approval_decision'){let p=document.getElementById('approval-'+d.id);if(p)p.textContent='Approval '+d.decision}else if(e.kind==='finding'){let p=document.createElement('p');p.textContent=d.claim+' — '+(d.evidence_url||'');document.querySelector('#findings').append(p)}else if(e.kind==='artifact'){let a=document.createElement('a');let old=document.getElementById('artifact-'+d.name);if(old)old.remove();a.id='artifact-'+d.name;a.href=`/api/jobs/${current}/artifacts/${encodeURIComponent(d.name)}${d.generation?'?generation='+d.generation:''}`;a.textContent=d.name+' (SHA-256 '+d.sha256.slice(0,12)+'…)';document.querySelector('#artifacts').append(a,document.createElement('br'))}else{let p=document.querySelector('#events');p.textContent+=`#${e.seq} ${e.kind} ${JSON.stringify(d)}\n`;p.scrollTop=p.scrollHeight}}
-async function decide(d,decision){try{await api(`/api/jobs/${current}/approve`,{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':key()},body:JSON.stringify({request_id:d.id,attempt:d.attempt,turn_id:d.turn_id,decision})})}catch(e){alert(e.message)}}
-function openJob(id){if(es)es.close();current=id;seen=0;lastState=null;document.querySelector('#events').textContent='';document.querySelector('#findings').textContent='';document.querySelector('#artifacts').textContent='';refresh();es=new EventSource(`/api/jobs/${id}/events?after=0`);es.onmessage=x=>{let e=JSON.parse(x.data);if(e.seq>seen){seen=e.seq;render(e)}};es.onerror=()=>{}}setInterval(()=>refresh().catch(()=>{}),3000);refresh().catch(()=>{});</script></body></html>'''
+from .dashboard import PAGE
 
 def app(root,engine='host',image='research-runner-worker:0.2.0'):
  from .protocol import capabilities,schemas
@@ -68,14 +60,19 @@ def app(root,engine='host',image='research-runner-worker:0.2.0'):
   try:return svc.status(jid)
   except KeyError:raise HTTPException(404,'job not found')
  @a.get('/api/jobs/{jid}/event-log')
- def event_log(jid,after:int=Query(0,ge=0),limit:int=Query(100,ge=1,le=1000)):
+ def event_log(jid,after:int=Query(0,ge=0),limit:int=Query(100,ge=1,le=1000),before:int|None=Query(None,ge=1),tail:bool=False):
   if not svc.store.get(jid):raise HTTPException(404,'job not found')
-  items=svc.store.events(jid,after,limit+1);page=[];size=0
+  backward=tail or before is not None
+  items=svc.store.events(jid,after,limit+1,before=before,newest_first=backward);page=[];size=0
   for item in items[:limit]:
    item_size=len(json.dumps(item))
    if page and size+item_size>2*1024*1024:break
    page.append(item);size+=item_size
-  return {'events':page,'next_cursor':page[-1]['seq'] if page else after,'has_more':len(items)>len(page)}
+  if backward:page.reverse()
+  return {'events':page,'next_cursor':page[-1]['seq'] if page else after,
+          'previous_cursor':page[0]['seq'] if page else None,
+          'has_more':not backward and len(items)>len(page),
+          'has_previous':backward and len(items)>len(page)}
  @a.get('/api/jobs/{jid}/artifact-manifest')
  def artifact_manifest(jid,generation:int|None=Query(None,ge=1)):
   if not svc.store.get(jid):raise HTTPException(404,'job not found')
@@ -115,13 +112,13 @@ def app(root,engine='host',image='research-runner-worker:0.2.0'):
   except Exception as e:raise HTTPException(409,str(e))
  @a.get('/api/jobs/{jid}/events')
  async def events(jid,after:Annotated[int,Query(ge=0)]=0,last_event_id:Annotated[str|None,Header()]=None):
-  if not svc.store.get(jid):raise HTTPException(404,'job not found')
+  if not await run_in_threadpool(svc.store.get,jid):raise HTTPException(404,'job not found')
   try:cursor=max(after,int(last_event_id)) if last_event_id else after
   except ValueError:raise HTTPException(400,'invalid Last-Event-ID')
   async def stream():
    nonlocal cursor
    while True:
-    for e in svc.store.events(jid,cursor,100):
+    for e in await run_in_threadpool(svc.store.events,jid,cursor,100):
      cursor=e['seq'];yield 'id: '+str(cursor)+'\ndata: '+json.dumps(e)+'\n\n'
     await asyncio.sleep(.4)
   return StreamingResponse(stream(),media_type='text/event-stream',headers={'Cache-Control':'no-store'})

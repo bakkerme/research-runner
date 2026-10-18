@@ -99,3 +99,65 @@ def test_mvp_dashboard_signin_finalize_and_published_partial(tmp_path):
  finally:
   try:next(fixture)
   except StopIteration:pass
+
+
+@pytest.mark.skipif(os.environ.get('RR_BROWSER_TEST')!='1',reason='requires local Chromium')
+def test_completed_large_history_opens_without_replay_and_stays_bounded(tmp_path):
+ import json
+ from playwright.sync_api import sync_playwright
+ from test_http_client import server as server_fixture
+ from runner.package import assemble
+ from runner.store import Store
+ fixture=server_fixture.__wrapped__(tmp_path);control,_=next(fixture)
+ try:
+  archive=tmp_path/'history.rrpkg';assemble(pathlib.Path(__file__).resolve().parents[1]/'sample-mvp',archive)
+  jid=control.submit(archive,'history',tmp_path/'receipt.json',True)['id']
+  control.control(jid,'start','history-start',True)
+  for _ in range(100):
+   status=control.request(f'/api/jobs/{jid}/status')
+   if status['state']=='finished':break
+   time.sleep(.025)
+  assert status['state']=='finished'
+  store=Store(tmp_path/'state/state.sqlite3')
+  publication=status['publication'];original_files=publication['files']
+  publication['files']=[dict(original_files[0],name=f'outputs/final/file-{i}.txt') for i in range(387)]+original_files
+  with store.db() as c:
+   c.execute('BEGIN IMMEDIATE')
+   for i in range(12326):store.event(c,jid,1,'progress',{'n':i,'text':'x'*2000})
+   c.execute('UPDATE publications SET manifest=? WHERE job_id=? AND generation=?',(json.dumps(publication),jid,publication['generation']))
+   c.execute('COMMIT')
+  last=store.events(jid,limit=1,newest_first=True)[0]['seq']
+  with sync_playwright() as pw:
+   browser=pw.chromium.launch(headless=True,executable_path=os.environ.get('RR_BROWSER_EXECUTABLE','/usr/bin/chromium'),args=['--no-sandbox'])
+   page=browser.new_page(accept_downloads=True);errors=[];streams=[]
+   page.on('pageerror',lambda e:errors.append(str(e)))
+   page.on('request',lambda r:streams.append(r.url) if '/events?' in r.url else None)
+   page.goto(control.url);page.locator('#token').fill('test-control');page.get_by_role('button',name='Sign in').click()
+   page.locator('.row').first.click()
+   page.get_by_role('heading',name='generic-lifecycle-fixture · finished').wait_for(timeout=10000)
+   page.wait_for_function('document.querySelector("#events").textContent.length>0')
+   assert page.locator('#artifacts a').count()==len(publication['files'])
+   assert page.evaluate('logRows.length')==100
+   assert len(page.locator('#events').text_content())<110000
+   assert streams and streams[0].endswith(f'after={last}')
+   page.get_by_role('button',name='Older events').click()
+   page.wait_for_function('viewingHistory===true')
+   assert page.evaluate('logRows[logRows.length-1].seq')==last-100
+   page.get_by_role('button',name='Latest events',exact=True).click()
+   page.wait_for_function('viewingHistory===false')
+   assert page.evaluate('seen')==last
+   # Live messages retain the same DOM/log bounds.
+   with store.db() as c:
+    c.execute('BEGIN IMMEDIATE')
+    for i in range(300):store.event(c,jid,1,'progress',{'n':i,'text':'x'*2000})
+    c.execute('COMMIT')
+   page.wait_for_function(f'seen==={last+300}',timeout=10000)
+   assert page.evaluate('logRows.length')==100
+   assert len(page.locator('#events').text_content())<110000
+   with page.expect_download() as download:page.get_by_role('link',name='outputs/handoff.md',exact=False).click()
+   assert download.value.suggested_filename=='handoff.md'
+   assert not errors
+   browser.close()
+ finally:
+  try:next(fixture)
+  except StopIteration:pass

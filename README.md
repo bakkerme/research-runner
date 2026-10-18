@@ -1,4 +1,4 @@
-# Research Runner 0.2.1 MVP
+# Research Runner 0.2.2 MVP
 
 A single-host runner for bounded agent jobs. **Codex runs on the host by default**,
 using the operator's normal login and session store. A payload supplies its brief,
@@ -113,6 +113,24 @@ reconciles owned orphan agent processes before resume. Attempts fence stale
 updates; operation-scoped keys prevent duplicate actions. Pending approvals expire
 on restart/finalization. Uncertain steering is not replayed. A started job cannot
 silently switch between native and containerized execution.
+
+The dashboard loads the current result and artifact generation directly. Its log
+shows at most 100 events with shortened entries; Older events and Latest events
+page through history. Full event bodies remain available through the HTTP API.
+
+The state lock records the owning PID and dashboard URL. A lock error means a
+controller still owns that directory, even if a separate foreground invocation
+has exited. Use that dashboard or the HTTP client. For a user-systemd deployment,
+inspect or restart the existing controller with:
+
+```sh
+systemctl --user status research-runner.service
+systemctl --user restart research-runner.service
+```
+
+Restarting interrupts active work; inspect status first. Keep the lock file in
+place: the operating system releases the lock when its owning process exits.
+The server allows five seconds for open HTTP streams to close during shutdown.
 
 Use the HTTP client while the service owns a state directory. Local-state commands
 remain available offline for administration. Snapshots require all jobs stopped

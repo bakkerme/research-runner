@@ -1,6 +1,6 @@
 import argparse,ipaddress,json,os,pathlib,subprocess,sys
 from .package import assemble,verify,deploy,digest
-from .service import Service
+from .service import Service,StateLockedError
 
 def resolve_host(host):
  if host!='tailscale':return host
@@ -56,11 +56,14 @@ def main():
   except ValueError as e:p.error(str(e))
   import uvicorn
   from .web import app
-  application=app(a.state,a.engine,a.image)
+  try:application=app(a.state,a.engine,a.image)
+  except StateLockedError as e:p.error(str(e))
   url_host='['+host+']' if ':' in host else host
+  application.state.service.set_dashboard_url(f'http://{url_host}:{a.port}')
   print(f'Dashboard: http://{url_host}:{a.port}',flush=True)
-  uvicorn.run(application,host=host,port=a.port);return
- svc=Service(a.state,a.engine,a.image)
+  uvicorn.run(application,host=host,port=a.port,timeout_graceful_shutdown=5);return
+ try:svc=Service(a.state,a.engine,a.image)
+ except StateLockedError as e:p.error(str(e))
  if a.cmd=='submit':print(svc.submit(a.archive,a.key)[0])
  elif a.cmd=='start':
   print(svc.launch(a.job,a.key,a.input),flush=True)

@@ -169,7 +169,7 @@ should be replayed until the checkpoint and actual outputs have been reconciled.
 | `POST /api/jobs/{id}/finalize`, `/stop` | Cooperative wrap-up or immediate stop; idempotent. |
 | `POST /api/jobs/{id}/input`, `/approve` | Existing steering/decision controls. |
 | `GET /api/jobs/{id}/status` | State, outcome, remaining time, deadlines, pending decisions and current publication. |
-| `GET /api/jobs/{id}/event-log?after=SEQ&limit=N` | Ordered replay; events, next_cursor, has_more. Limit 1..1000. |
+| `GET /api/jobs/{id}/event-log?after=SEQ&limit=N` | Ordered replay; events, next_cursor, has_more. Limit 1..1000. `tail=true` selects recent events; `before=SEQ` pages backward with previous_cursor and has_previous. |
 | `GET /api/jobs/{id}/events` | SSE; `after` and Last-Event-ID reconnect. |
 | `GET /api/jobs/{id}/checkpoint` | Current published checkpoint and generation. |
 | `GET /api/jobs/{id}/artifact-manifest?generation=N` | Select immutable publication; defaults to latest. |

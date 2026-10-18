@@ -11,7 +11,7 @@ def test_serve_defaults_to_detected_tailscale_address(monkeypatch,capsys):
  import uvicorn
  import runner.web
  probe=Mock(return_value=SimpleNamespace(stdout='100.101.102.103\n'))
- application=object();factory=Mock(return_value=application);run=Mock()
+ application=Mock();factory=Mock(return_value=application);run=Mock()
  monkeypatch.setattr(cli.subprocess,'run',probe)
  monkeypatch.setattr(runner.web,'app',factory)
  monkeypatch.setattr(uvicorn,'run',run)
@@ -19,7 +19,7 @@ def test_serve_defaults_to_detected_tailscale_address(monkeypatch,capsys):
  cli.main()
  probe.assert_called_once_with(['tailscale','ip','-4'],capture_output=True,text=True,check=True,timeout=5)
  factory.assert_called_once_with('./var','host','research-runner-worker:0.2.0')
- run.assert_called_once_with(application,host='100.101.102.103',port=8765)
+ run.assert_called_once_with(application,host='100.101.102.103',port=8765,timeout_graceful_shutdown=5)
  assert 'http://100.101.102.103:8765' in capsys.readouterr().out
 
 
@@ -27,14 +27,14 @@ def test_explicit_host_skips_tailscale(monkeypatch):
  import uvicorn
  import runner.web
  probe=Mock(side_effect=AssertionError('must not probe Tailscale'))
- run=Mock();application=object()
+ run=Mock();application=Mock()
  monkeypatch.setattr(cli.subprocess,'run',probe)
  monkeypatch.setattr(runner.web,'app',Mock(return_value=application))
  monkeypatch.setattr(uvicorn,'run',run)
  monkeypatch.setattr(cli.sys,'argv',['research-runner','serve','--host','127.0.0.1','--port','9876'])
  cli.main()
  probe.assert_not_called()
- run.assert_called_once_with(application,host='127.0.0.1',port=9876)
+ run.assert_called_once_with(application,host='127.0.0.1',port=9876,timeout_graceful_shutdown=5)
 
 
 @pytest.mark.parametrize('result',[

@@ -18,12 +18,27 @@ from .protocol import Checkpoint, Result, is_mvp, load_contract
 from .store import ACTIVE, Store
 
 
+class StateLockedError(RuntimeError):
+ pass
+
+
 class Service:
  def __init__(self,root,engine='host',image='research-runner-worker:0.2.0'):
   self.root=pathlib.Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
   self._owner=(self.root/'service.lock').open('a+b')
   try:fcntl.flock(self._owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
-  except BlockingIOError:raise RuntimeError('another research-runner service owns this state directory')
+  except BlockingIOError:
+   self._owner.seek(0)
+   try:owner=json.loads(self._owner.read(65536))
+   except (ValueError,UnicodeError):owner={}
+   self._owner.close()
+   identity=' (PID '+str(owner['pid'])+')' if isinstance(owner,dict) and owner.get('pid') else ''
+   url=owner.get('dashboard_url') if isinstance(owner,dict) else None
+   raise StateLockedError('another research-runner service owns this state directory: '+str(self.root)+identity+
+                         ('. Dashboard: '+url if isinstance(url,str) else '')+
+                         '. Use its HTTP API or stop the owning controller before restarting.') from None
+  self.owner_info={'pid':os.getpid(),'state':str(self.root)}
+  self._write_owner()
   self.store=Store(self.root/'state.sqlite3');self.engine=engine;self.image=image
   # Explicit host configuration, never selected by a submitted workload.
   auth=os.environ.get('RESEARCH_RUNNER_CODEX_AUTH_FILE') if engine=='docker' else None
@@ -35,6 +50,13 @@ class Service:
   known={j['id'] for j in self.store.list()}
   for p in (self.root/'jobs').glob('*'):
    if p.is_dir() and p.name not in known:shutil.rmtree(p)
+
+ def _write_owner(self):
+  self._owner.seek(0);self._owner.truncate()
+  self._owner.write(json.dumps(self.owner_info).encode());self._owner.flush()
+
+ def set_dashboard_url(self,url):
+  self.owner_info['dashboard_url']=url;self._write_owner()
 
  def _kill_orphans(self):
   if self.engine=='host':
@@ -344,6 +366,10 @@ class Service:
   with self.store.db() as c:
    last=c.execute('SELECT MAX(seq) AS seq,MAX(ts) AS ts FROM events WHERE job_id=?',(jid,)).fetchone()
    pending=[dict(a) for a in c.execute("SELECT id,attempt,turn_id FROM approvals WHERE job_id=? AND state='pending'",(jid,))]
+   if pending:
+    requests={json.loads(row['data'])['id']:json.loads(row['data']) for row in c.execute(
+     "SELECT data FROM events WHERE job_id=? AND kind='approval_request' AND json_extract(data,'$.id') IN (SELECT id FROM approvals WHERE job_id=? AND state='pending')",(jid,jid))}
+    pending=[dict(requests.get(a['id'],{}),**a) for a in pending]
   j.update(format='runner-status/v1',remaining_seconds=max(0,j['deadline']-time.time()) if j['deadline'] else None,
            last_event=last['seq'] or 0,last_activity=last['ts'],pending_approvals=pending,
            publication=self.store.publication(jid),validation='not_run')
