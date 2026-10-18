@@ -24,7 +24,7 @@ def main():
   if cmd=='collect':x.add_argument('--generation',type=int)
   if cmd=='start':x.add_argument('--input')
  x=s.add_parser('serve');x.add_argument('--host',default='tailscale',help='bind address, or tailscale to discover this device\'s IPv4 address (default: tailscale)');x.add_argument('--port',type=int,default=8765)
- p.add_argument('--state',default=os.getenv('RESEARCH_RUNNER_STATE','./var'));p.add_argument('--engine',choices=['docker','host'],default='docker');p.add_argument('--image',default='research-runner-worker:0.2.0')
+ p.add_argument('--state',default=os.getenv('RESEARCH_RUNNER_STATE','./var'));p.add_argument('--engine',choices=['docker','host'],default='host',help='Codex execution location (default: host; independent of workload tool containers)');p.add_argument('--image',default='research-runner-worker:0.2.0')
  p.add_argument('--url',help='remote runner URL; token from RESEARCH_RUNNER_TOKEN')
  a=p.parse_args()
  if a.cmd=='assemble':print(assemble(a.source,a.archive));return

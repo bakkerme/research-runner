@@ -33,10 +33,16 @@
     "runtime": {
       "type": "object",
       "required": [
-        "image",
-        "image_id",
         "sdk"
       ],
+      "dependentRequired": {
+        "image": [
+          "image_id"
+        ],
+        "image_id": [
+          "image"
+        ]
+      },
       "properties": {
         "image": {
           "type": "string"

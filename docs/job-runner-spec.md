@@ -1,7 +1,8 @@
 # Research Runner MVP contract (0.2.0)
 
 This is the implemented workload-agnostic interface. The runner executes one
-job at a time on one host. Producers supply their own scope, instructions,
+job at a time on one host. Codex runs natively on that host by default; optional
+containers isolate workload tools, independently of agent execution. Producers supply their own scope, instructions,
 inputs and acceptance criteria. The runner checks protocol and file integrity;
 it does not establish the correctness of workload conclusions.
 
@@ -37,9 +38,10 @@ Require `0 < termination_seconds < finalization_seconds < time_seconds`.
 Checkpoint interval must be 0.1..300 seconds. Policy is frozen at submission.
 Other manifest fields remain: `format`, `name`, `adapter`, `runtime`, `brief`,
 `agents`, `skills`, `inputs`, `resources`, `required_outputs`. Adapters are
-`codex` and deterministic `fixture`. Runtime image ID and SDK version are pinned.
-The [example manifest](../sample-mvp/manifest.json) is directly assemblable;
-replace its runtime image pin with the target host's built image ID before use.
+`codex` and deterministic `fixture`. The runtime SDK version is pinned. Native
+payloads need no image fields. An explicit containerized-agent deployment additionally
+requires a pinned image and image_id pair. The
+[example manifest](../sample-mvp/manifest.json) is directly assemblable for native execution.
 
 Every package file must be declared. Brief, agent instructions, skills and inputs
 are hashed in the `package.json` envelope. Plan, provenance inventory, previous
@@ -112,7 +114,7 @@ including outages/approval waits; queued time does not. Resume cannot reset the
 allowance. Expired jobs require a deliberate new submission with a new key.
 
 At `start + budget - finalization_seconds`, enter `finalizing`, expire pending
-approvals, reject steering and write `/requests/finalize.json` with reason,
+approvals, reject steering and write the job control directory's `finalize.json` with reason,
 attempt and hard deadline. The worker checks between operations; the Codex adapter
 also attempts to steer the active turn with wrap-up instructions and declines new
 approval requests. The dashboard's Finish up action requests the same transition
@@ -121,7 +123,8 @@ completion. Final results must respect that reason or report no actionable work.
 
 The finalization phase is cooperative: the MVP cannot mediate every model tool
 invocation. Instructions require bounded operations and prohibit detached/external
-work. The controller kills the worker process group and its Docker container at
+work. The controller kills the worker process group (and agent container only
+when explicitly using that execution mode) at
 `start + budget - termination_seconds` if it has not exited. Cleanup starts within
 that reserve; inability to confirm it is reported as failure, never completion.
 Unresponsive workers cannot guarantee graceful handoff, so publish checkpoints
@@ -190,15 +193,29 @@ issues a verification receipt only after all files pass.
 
 ## Runtime boundary
 
-Docker is the supported isolation mode. V2 mounts declared inputs read-only;
-workspace and session are job-specific. No Docker socket or host credentials
-are exposed. Host mode is a trusted debugging mode without container isolation
-or equivalent resource/input enforcement. Detached remote operations are outside
-the MVP ownership model and are not advertised as supported.
+Native Codex is the default. It uses the operator's installed CLI (or explicit
+RESEARCH_RUNNER_CODEX_BIN), normal CODEX_HOME, credentials and persistent sessions.
+The SDK retains its pin. Agent cwd is the independent job workspace; permissions
+use workspace_write and the configured approval flow. Native execution provides
+runner deadlines/process supervision, not Docker CPU/memory caps or immutable
+input mounts. The capability/status API reports that distinction. Session records
+remain in the host's Codex home; workload snapshots do not include them. Same-host
+resume is supported; cross-host native-session migration is not advertised.
 
-The Codex adapter uses the pinned SDK's streaming/steering interface; see the
+Optional Docker/Podman **dependency tools** are supplied and managed by the workload.
+Their image pins, assets, mounts, ownership, timeouts and cleanup belong in its
+brief/tooling. The agent execution engine does not automatically own these tool
+containers. They must remain bounded and recoverable if the agent is interrupted.
+No emulator-specific behavior is built into the runner.
+
+A separate explicit --engine docker mode can containerize the agent itself. That
+alternative requires an image pin and separate credential provisioning; its
+restrictions are not requirements for ordinary payloads. Native mode needs no
+credential projection or Docker installation. Once a job starts, its execution
+engine is recorded and cannot silently change on resume. Historical jobs with an
+unknown engine require operator care and their original runtime/session store.
+
+The Codex adapter uses the SDK's streaming/steering interface; see the
 [official app-server documentation](https://learn.chatgpt.com/docs/app-server).
-Live authentication, finalize steering, approvals and restored-session behavior
-still need target-host qualification. Deterministic fixture tests prove controller
-behavior, not model compliance. Workers must use a rebuilt 0.2.0 image; never
-reuse an old image while claiming the new worker protocol is active.
+Fixtures qualify controller behavior. Live native recovery and finalization must
+be qualified on the target host using its actual Codex executable and account.

@@ -3,13 +3,7 @@
   "name": "generic-lifecycle-fixture",
   "adapter": "fixture",
   "runtime": {
-    "image": "research-runner-worker:0.2.0",
-    "platforms": [
-      "linux/amd64",
-      "linux/arm64"
-    ],
-    "sdk": "openai-codex==0.159.0",
-    "image_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    "sdk": "openai-codex==0.159.0"
   },
   "brief": "brief.md",
   "agents": "AGENTS.md",

@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import signal
+import shutil
 import sys
 import threading
 import time
@@ -55,7 +56,7 @@ def main():
  root=pathlib.Path(a.work);m=json.loads((root/'package.json').read_text())['manifest']
  if is_mvp(m) and a.deadline:
   # Independent fallback if the controller dies. Docker stops container children
-  # when PID 1 exits; host debug workers own a session/process group.
+  # when PID 1 exits; native host workers own a session/process group.
   def expire():
    try:
     if os.getsid(0)==os.getpid():os.killpg(os.getpgrp(),signal.SIGKILL)
@@ -67,10 +68,14 @@ def main():
  from openai_codex import Codex,CodexConfig,ApprovalMode,Sandbox
  prompt=(root/m['brief']).read_text()+'\n\n'+(a.input or 'Write all required outputs.')
  if is_mvp(m):
-  prompt+='''\nRunner MVP contract: Follow the brief within the allotted scope. You may finish early when complete or when no allowed actionable path remains. Do not repeat unchanged failures to fill time. Preserve useful partial outputs and explain blockers. Atomically replace outputs/checkpoint.json after meaningful results with {"format":"runner-checkpoint/v1","summary":"...","next_action":"...","blockers":[]}. Before ending, write outputs/handoff.md and atomically replace outputs/result.json with {"format":"runner-result/v1","outcome":"complete|partial|blocked","reason":"scope_complete|budget_exhausted|no_actionable_work|user_requested","summary":"...","next_action":"...","blockers":[]}. Complete requires scope_complete and all required outputs; blocked requires no_actionable_work and nonempty blockers. A runner finalize message requires stopping new substantive work and wrapping up partial outputs. Bound each tool invocation to fit the remaining time; do not launch detached or external work. Check /requests/finalize.json between operations. Domain conclusions remain your claims, not runner-validated facts.\n'''
+  prompt+='''\nRunner MVP contract: Follow the brief within the allotted scope. You may finish early when complete or when no allowed actionable path remains. Do not repeat unchanged failures to fill time. Preserve useful partial outputs and explain blockers. Atomically replace outputs/checkpoint.json after meaningful results with {"format":"runner-checkpoint/v1","summary":"...","next_action":"...","blockers":[]}. Before ending, write outputs/handoff.md and atomically replace outputs/result.json with {"format":"runner-result/v1","outcome":"complete|partial|blocked","reason":"scope_complete|budget_exhausted|no_actionable_work|user_requested","summary":"...","next_action":"...","blockers":[]}. Complete requires scope_complete and all required outputs; blocked requires no_actionable_work and nonempty blockers. A runner finalize message requires stopping new substantive work and wrapping up partial outputs. Bound each tool invocation to fit the remaining time; use only bounded owned operations. Dependency containers must be managed by workload tooling with explicit ownership, deadlines and cleanup; never leave untracked detached or remote work. Check /requests/finalize.json between operations. Domain conclusions remain your claims, not runner-validated facts.\n'''
   prompt+=f'Absolute hard deadline (Unix UTC seconds): {a.deadline}. Finalization reserve: {m["policy"]["finalization_seconds"]} seconds. Termination begins {m["policy"]["termination_seconds"]} seconds before that deadline.\n'
+ prompt=prompt.replace('/requests/finalize.json',str(requests/'finalize.json'))
  done=threading.Event();finalizing=threading.Event()
- with Codex(CodexConfig(cwd=str(root))) as client:
+ # Native execution uses the operator's installed Codex and normal credential /
+ # session store. Container execution has CODEX_HOME=/session and bundled CLI.
+ codex_bin=os.environ.get('RESEARCH_RUNNER_CODEX_BIN') or (shutil.which('codex') if os.environ.get('CODEX_HOME')!='/session' else None)
+ with Codex(CodexConfig(cwd=str(root),codex_bin=codex_bin)) as client:
   current_turn={'id':''}
   def approval(method,params):
    if method not in ('item/commandExecution/requestApproval','item/fileChange/requestApproval'):return {}

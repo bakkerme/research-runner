@@ -1,5 +1,9 @@
 # MVP validation — 18 October 2026
 
+This is the initial validation record. See the later
+[DGX native qualification](dgx-qualification.md) for the corrected host-agent
+architecture and live recovery/finalization results.
+
 Local environment: macOS, Python 3.14.6, pinned Codex Python SDK 0.159.0,
 Playwright 1.64.0 and installed Google Chrome in headless mode.
 

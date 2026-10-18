@@ -1,71 +1,51 @@
 # Research Runner 0.2.0 MVP
 
-A single-host runner for bounded agent jobs. Package a workload and its existing
-context, submit it repeatably, monitor through a dashboard or JSON API, and
-collect hash-verified outputs. Workloads define their own scope, tools and
-acceptance criteria. The runner reports complete, partial and blocked outcomes
-separately from execution success.
+A single-host runner for bounded agent jobs. **Codex runs on the host by default**,
+using the operator's normal login and session store. A payload supplies its brief,
+existing context, tools and acceptance criteria. Containers are optional workload
+tools—for example, an emulator with isolated dependencies—not a prerequisite for
+running the agent.
 
-Start with the [MVP contract](docs/job-runner-spec.md),
-[producer-agent handoff](docs/producer-agent-handoff.md), and
-[target-host checklist](docs/implementation-readiness.md).
+The runner provides repeatable packages, a human dashboard and agent HTTP API,
+checkpoints, deadline wrap-up, complete/partial/blocked outcomes and hash-verified
+collection. Start with the [MVP contract](docs/job-runner-spec.md),
+[producer-agent handoff](docs/producer-agent-handoff.md) and
+[host checklist](docs/implementation-readiness.md).
 
-## Install and test
+## Install and serve
 
-Python 3.11+ is required; Python 3.12 is recommended for the worker image. Local
-fixture validation uses Python 3.14. Create an environment with a supported
-interpreter rather than relying on an unrelated system Python:
+Use Python 3.11+ (3.12 recommended) and an installed, authenticated Codex CLI.
 
 ```sh
 python3.12 -m venv .venv
 .venv/bin/pip install -e '.[test]'
-.venv/bin/pytest -q
-```
-
-Docker is the production isolation mode. Build the worker on the target host
-(ARM64 and x86 wheelhouses are not interchangeable):
-
-```sh
-.venv/bin/pip download -d wheelhouse 'setuptools>=75' wheel 'openai-codex==0.159.0' 'fastapi==0.116.1' 'uvicorn==0.35.0' 'pydantic==2.14.1'
-docker build -t research-runner-worker:0.2.0 .
-docker image inspect research-runner-worker:0.2.0 --format '{{.Id}}'
-```
-
-The base image and SDK are pinned. Put the returned image ID and image tag into
-your package's `runtime` section before assembling. `sample-mvp/` is an editable
-v2 fixture template with an unconfigured image ID; real workloads select the
-`codex` adapter and supply their own brief, inputs and output declarations.
-Legacy `sample/` and `sample-codex/` demonstrate v1; their old image pins require
-replacement on a new host. Rebuild the worker for 0.2.0; updating only host Python
-code does not upgrade a running image.
-
-## Serve and access
-
-```sh
+codex login status
 .venv/bin/research-runner --state ./var serve
 ```
 
+The SDK is pinned to 0.159.0. The native adapter uses Codex found on PATH, or
+`RESEARCH_RUNNER_CODEX_BIN` when explicitly configured by the operator. If neither
+is available, it falls back to the SDK's bundled executable. Native authentication,
+config and sessions use the normal CODEX_HOME (default ~/.codex); no credentials
+are copied or mounted. Keep the same user/home/runtime when resuming a job.
+
 The service discovers its Tailscale IPv4 address and prints the dashboard URL.
-Discovery failure stops startup. For local access:
+For localhost use `serve --host 127.0.0.1`. Discovery failure stops startup.
+Set distinct `RESEARCH_RUNNER_READ_TOKEN` and `RESEARCH_RUNNER_CONTROL_TOKEN`
+server variables for independent monitors. Set both or neither; without tokens
+all callers on the trusted network have controls. Do not expose it publicly.
+Dashboard sign-in accepts either role. Remote CLI clients use
+`RESEARCH_RUNNER_TOKEN` privately from their environment. Server control tokens
+are stripped from the worker environment.
 
-```sh
-.venv/bin/research-runner --state ./var serve --host 127.0.0.1
-```
+## Prepare and run a workload
 
-Configure distinct `RESEARCH_RUNNER_READ_TOKEN` and
-`RESEARCH_RUNNER_CONTROL_TOKEN` in the server environment for independent human
-and agent access. Both or neither must be set. With neither, all callers on the
-trusted network have full controls. Do not expose this service publicly.
-Dashboard sign-in accepts either token; read-only controls are rejected by the
-server. CLI clients use `RESEARCH_RUNNER_TOKEN` privately from their environment.
-
-## Prepare, submit, monitor and collect
-
-Copy `sample-mvp/` to a new workload source folder, select its runtime image pin,
-and customize the brief and declared inputs. Every source file must be declared;
-keep generated archives outside the source folder. Context, plans, provenance
-and existing results are ordinary inputs rather than domain-specific runner
-features. Keep credentials and unrelated private data out of packages.
+Copy `sample-mvp/` into a fresh source directory and customize the brief, agent
+instructions, declared inputs and outputs. Its native runtime declaration needs
+only the SDK pin; no Docker image is required. Select `codex` for real work;
+`fixture` produces deterministic lifecycle-test output. Every source file must be
+declared. Keep archives outside the source folder and credentials out of payloads.
+Plans, provenance, previous results and workload tools are ordinary inputs.
 
 ```sh
 .venv/bin/research-runner assemble SOURCE job.rrpkg
@@ -80,92 +60,84 @@ features. Keep credentials and unrelated private data out of packages.
 .venv/bin/research-runner --url http://RUNNER:8765 collect JOB_ID NEW_DIRECTORY --apply
 ```
 
-Remote mutations preview without `--apply`; collecting pins one publication and
-creates a fresh destination. Submission saves request identity before sending;
-repeat the same key/receipt after uncertain network responses. Reusing a start
-key returns its original result; deliberate resume uses a new key under the
-original deadline. `finalize JOB_ID --key KEY --apply` requests wrap-up;
-`stop JOB_ID --key KEY --apply` forces an immediate stop. Status/event reads never
-steer or resume work. The same controls and publications appear in the dashboard.
+Remote mutations preview without `--apply`; collection pins a generation and
+creates a fresh destination. Submission persists request identity before sending.
+Repeat its key/receipt after uncertain responses. A repeated start key returns
+its original result; a deliberate resume uses a new key under the same deadline.
+`finalize JOB_ID --key KEY --apply` requests wrap-up; `stop` forces immediate stop.
+Monitoring never implicitly steers or resumes work.
 
-Packages are deterministic hashed tar archives: maximum 512 entries, 32 MiB/file,
-128 MiB total. V2 adds a small inline time policy, result/handoff protocol and
-optional checkpoints. Large dataset imports, scheduling, automatic retries and
-automatic continuation are deferred. Capability discovery reports these limits.
+Packages allow 512 archive entries, 32 MiB/file and 128 MiB total, with deterministic
+hashes and strict extraction. Large dataset storage, scheduling, automatic retries
+and automatic continuation are deferred. Discovery reports these limits.
 
-## Deadline and result behavior
+## Lifecycles and dependency tools
 
-The total wall allowance starts on first launch and persists across interruptions
-and resumes. At the soft cutoff, the runner asks the worker to stop new work and
-finalize. Before the hard deadline, it kills remaining owned execution using a
-termination reserve. Cooperative shutdown cannot guarantee a responsive model;
-periodic partial publications preserve work when forced termination is needed.
+V2 policies allocate total wall time, finalization reserve and termination reserve.
+The allowance starts on first launch and persists across interruptions. At the soft
+cutoff, the worker is asked to finalize; at the forced cutoff remaining owned agent
+processes are killed. Periodic publications preserve work if graceful exit fails.
 
-A worker can finish early when no allowed path remains. V2 `finished` means a
-protocol-valid closeout whose task outcome is `complete`, `partial` or `blocked`.
-Workload conclusions remain claims and validation is `not_run`; include your own
-checks and review evidence. V1 retains historical `completed` behavior.
+Agents can finish early when no allowed path remains. Required closeout files are
+`outputs/result.json` and `outputs/handoff.md`; `outputs/checkpoint.json` is
+recommended. See [schemas](schemas/result.json) or `research-runner schemas`.
+`finished` means protocol-valid closeout, with a separate complete/partial/blocked
+claim. Validation is `not_run`; workload-specific checks/review are payload work.
+V1 keeps historical completed behavior.
 
-Required v2 files are `outputs/result.json` and `outputs/handoff.md`;
-`outputs/checkpoint.json` is recommended. See [schemas](schemas/result.json) or
-run `research-runner schemas` for exact JSON shapes and the contract for
-cross-field constraints. Additional declared outputs are mandatory for complete
-scope; partial/blocked closeout may explain their absence.
+Workload tooling may invoke Docker/Podman for dependencies using normal host
+permissions. It must preflight its engine, pin its tool images, record ownership,
+mount originals appropriately, bound operations to remaining time and clean up
+its own containers. The MVP does not supervise arbitrary dependency containers
+through the agent execution engine. Agent process deadlines are not a substitute
+for tool-level timeout/cleanup. Container requirements belong in the workload
+brief/tools, not the agent runtime declaration.
 
-## Recovery, snapshots and isolation
+Native Codex uses its workspace sandbox and configured approvals. Host execution
+does not provide container-level CPU/memory caps or enforce immutable input mounts;
+resource requests are advisory except for the runner's deadline/process supervision.
+Capabilities identify the actual execution engine and enforcement boundary.
 
-SQLite state/events share transactions. Attempts fence stale updates; control
-keys bind duplicate requests to their payloads. The controller owns one lifetime
-state lock and reconciles owned orphan workers before allowing resume. Pending
-approvals expire on restart/finalization. Uncertain steering is not replayed.
+## Recovery and snapshots
 
-Do not run local-state CLI commands while the server owns the same state directory;
-use HTTP. Offline `submit`, `start`, `stop`, `download`, `snapshot` and `restore`
-remain available for administration; legacy local controls apply immediately.
-`--engine host` is trusted debugging only, without Docker's isolation/resource
-or read-only input enforcement. Production Docker workers receive only job,
-session and IPC mounts, no Docker socket or host home. Rootless Docker uses UID
-0 mapped to the unprivileged daemon owner; ordinary Docker uses host UID/GID.
+The controller owns the state lock, persists events/state transactionally and
+reconciles owned orphan agent processes before resume. Attempts fence stale
+updates; operation-scoped keys prevent duplicate actions. Pending approvals expire
+on restart/finalization. Uncertain steering is not replayed. A started job cannot
+silently switch between native and containerized execution.
 
-Stop all jobs before snapshotting. Snapshots include SQLite, jobs and selected
-Codex session JSONL, exclude control inboxes and known credential files, and may
-contain private task content. Restore only into a fresh directory. Test live
-session continuation on the target host before relying on migration.
+Use the HTTP client while the service owns a state directory. Local-state commands
+remain available offline for administration. Snapshots require all jobs stopped
+and include the ledger, workload files and published artifacts. **Native Codex
+sessions remain in the operator's CODEX_HOME and are not bundled.** Same-host
+recovery uses the stored thread ID; cross-host session migration is not advertised.
+Do not export the host's whole Codex home or credentials to make a snapshot portable.
 
-```sh
-.venv/bin/research-runner --state ./var snapshot JOB_ID snapshot.tar.gz
-.venv/bin/research-runner restore snapshot.tar.gz restored-state
-```
-
-## Validation boundaries
-
-The automated suite exercises v1 compatibility, v2 normal/blocked/partial finish,
-forced deadline preservation, persisted budgets, stale-attempt rejection, JSON
-contracts, immutable downloads, read/control access, replay, transport receipts
-and collection. See [host readiness](docs/implementation-readiness.md) for the
-remaining operational checks.
-
-No live authenticated Codex task or 0.2.0 Docker build has been qualified on this
-Mac. Authentication must be provisioned separately from packages, workspace and
-exports. Fixture output is deterministic and labelled fixture, not model evidence.
-The SDK uses its pinned approval handler bridge; live approval/finalize steering
-and restored sessions must be checked on the actual host.
-
-For a short live qualification using an existing host login, the server may set
-`RESEARCH_RUNNER_CODEX_AUTH_FILE` to the existing auth cache path. Only Codex
-workers receive a read-only projection at `/session/auth.json`; credentials are
-not copied into the package, image or workspace. This does not establish token
-refresh for an unattended long run. A credential file mount may leave an empty
-mount-point stub in the host session directory; snapshots deliberately reject
-any `auth.json`, including that stub, rather than risk exporting credentials.
-
-Optional browser tests use headless Chromium/Chrome:
+## Qualification
 
 ```sh
-.venv/bin/pip install -e '.[browser]'
-RR_BROWSER_TEST=1 RR_BROWSER_EXECUTABLE=/path/to/chrome .venv/bin/pytest -q tests/test_browser_dashboard.py
+.venv/bin/pytest -q
+.venv/bin/python tools/qualify_host.py --codex-bin /path/to/codex --output runs/NEW_QUALIFICATION
+.venv/bin/python tools/qualify_host.py --codex-bin /path/to/codex --output runs/NEW_QUALIFICATION --apply
 ```
 
-Docker recovery tests are opt-in with `RR_DOCKER_TEST=1` after building and pinning
-the sample package locally. Do not publish local state, wheelhouses, generated
-packages, credentials or private workload material to Git.
+The probe defaults to native execution, needs no Docker, owns a fresh private state
+and tests deadlines, blocked finish, real model session recall after controller death,
+finalize steering and collection. See [readiness](docs/implementation-readiness.md)
+and the [DGX evidence](docs/dgx-qualification.md). Fixture tests alone do not prove
+live model compliance. Optional browser checks use `RR_BROWSER_TEST=1` and
+`RR_BROWSER_EXECUTABLE=/path/to/chrome` after installing `.[browser]`.
+
+## Optional containerized agent
+
+`--engine docker` is an explicit alternative, separate from workload tool containers.
+It requires a built worker image and runtime image/tag digest in the package.
+The Dockerfile and v1 samples remain available for that mode. Build on the target
+architecture using an appropriate wheelhouse; rootless mapping and read-only inputs
+apply there. The optional `RESEARCH_RUNNER_CODEX_AUTH_FILE` setting projects an
+existing auth cache read-only; long-run refresh in that mode is not qualified.
+Native execution does not use that setting. No Docker socket is mounted into
+containerized agents. Do not infer support for nested workload containers.
+
+Do not commit private state, credentials, generated packages, test outputs or
+workload assets. The existing DGX service is not automatically upgraded by a probe.

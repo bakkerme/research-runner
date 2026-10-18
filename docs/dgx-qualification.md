@@ -1,5 +1,34 @@
 # DGX qualification — 18 October 2026
 
+## Intended native-agent path
+
+After correcting the execution boundary, the probe passed using host Codex
+0.162.1, SDK 0.159.0, the normal host login and persistent CODEX_HOME. No agent
+container was launched and no credentials were copied or projected. Containers
+remain optional workload tools.
+
+Verified native checks: soft-timeout partial finish, forced deadline with retained
+outputs, early blocked finish, native session store, abrupt controller death,
+same-thread recall on attempt 2 without resupplying its marker, unchanged deadline,
+prior-generation download, authenticated collection and acknowledged live finalize.
+The resumed thread was 01a14d34-db18-7181-816f-d14c6275d75e; the finalize probe used
+01a14d35-708c-7f02-b596-f7aefd035a08. No processes retained working directories under
+the test jobs afterward. The existing live service and containers were unchanged.
+
+Evidence is retained privately at the qualification checkout under
+runs/host-002/. runs/host-001/ preserves a preparation failure caused by macOS
+metadata sidecars in the transfer; those generated sidecars were removed only
+from the isolated source checkout before retrying. Local regression verification
+passed **42 tests**, including headless Chrome, with one optional Docker test
+skipped.
+
+Native sessions live in the operator's Codex home, not in job snapshots. This is
+same-host recovery, not cross-host migration. Normal host credential management
+applies; the read-only projection limitation below concerns only the separate
+containerized-agent experiment.
+
+## Earlier optional containerized-agent experiment
+
 Passed in an isolated checkout/state on DGX, without restarting the existing
 runner on port 8765 or changing its running containers.
 

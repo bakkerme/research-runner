@@ -27,7 +27,7 @@ class Store:
    columns={r['name'] for r in c.execute('PRAGMA table_info(jobs)')}
    for name,kind in [('started_at','REAL'),('deadline','REAL'),('finalize_at','REAL'),
                      ('terminate_at','REAL'),('finalize_reason','TEXT'),('outcome','TEXT'),
-                     ('result','TEXT')]:
+                     ('result','TEXT'),('execution_engine','TEXT')]:
     if name not in columns:c.execute(f'ALTER TABLE jobs ADD COLUMN {name} {kind}')
    c.execute('CREATE TABLE IF NOT EXISTS publications(job_id TEXT,generation INTEGER,attempt INTEGER,manifest TEXT,PRIMARY KEY(job_id,generation))')
  def db(self):
@@ -61,7 +61,7 @@ class Store:
     c.execute("UPDATE approvals SET state='expired' WHERE job_id=? AND state='pending'",(jid,))
    result={'id':jid,'state':new_state or j['state'],'attempt':j['attempt'],'data_hash':hashlib.sha256(json.dumps(data or {},sort_keys=True).encode()).hexdigest()}
    self.event(c,jid,j['attempt'],action,data or {});c.execute('INSERT INTO keys VALUES(?,?,?)',(key,scope,json.dumps(result)));c.execute('COMMIT');return result,True
- def start_attempt(self,jid,key=None,input_text=None,budget=None,policy=None):
+ def start_attempt(self,jid,key=None,input_text=None,budget=None,policy=None,engine=None):
   with self.db() as c:
    c.execute('BEGIN IMMEDIATE')
    if key:
@@ -73,6 +73,9 @@ class Store:
    if c.execute("SELECT 1 FROM jobs WHERE state IN ('running','finalizing') LIMIT 1").fetchone():raise ValueError('another job running')
    j=c.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()
    if not j or j['state'] not in ('queued','interrupted','waiting','failed'):raise ValueError('not startable')
+   if engine and j['execution_engine'] and engine!=j['execution_engine']:
+    raise ValueError('cannot change a started job execution engine; submit a new job')
+   if engine:c.execute('UPDATE jobs SET execution_engine=? WHERE id=?',(engine,jid))
    now=time.time()
    if j['terminate_at'] is not None and now>=j['terminate_at']:raise ValueError('job budget exhausted; submit a new job to grant a new budget')
    if policy and j['started_at'] is None:

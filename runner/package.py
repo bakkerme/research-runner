@@ -26,10 +26,12 @@ def validate_manifest(m):
     if set(m) != fields: raise ValueError('manifest fields')
     if m['adapter'] not in ('codex','fixture'): raise ValueError('adapter')
     if not isinstance(m['name'], str) or not m['name'] or len(m['name']) > 100: raise ValueError('name')
-    if not isinstance(m['runtime'], dict) or not isinstance(m['runtime'].get('image'), str): raise ValueError('runtime')
+    if not isinstance(m['runtime'], dict): raise ValueError('runtime')
     if m['runtime'].get('sdk')!='openai-codex==0.159.0':raise ValueError('sdk pin')
-    image_id=m['runtime'].get('image_id')
-    if not isinstance(image_id,str) or len(image_id)!=71 or not image_id.startswith('sha256:') or any(c not in '0123456789abcdef' for c in image_id[7:]):raise ValueError('image pin')
+    if not is_mvp(m) or 'image' in m['runtime'] or 'image_id' in m['runtime']:
+        if not isinstance(m['runtime'].get('image'),str):raise ValueError('runtime image')
+        image_id=m['runtime'].get('image_id')
+        if not isinstance(image_id,str) or len(image_id)!=71 or not image_id.startswith('sha256:') or any(c not in '0123456789abcdef' for c in image_id[7:]):raise ValueError('image pin')
     for k in ('brief','agents'): relpath(m[k])
     for k in ('skills','inputs','required_outputs'):
         if not isinstance(m[k], list): raise ValueError(k)

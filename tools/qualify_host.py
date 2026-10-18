@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Opt-in Docker/live-Codex qualification. Owns only its fresh state and jobs.
+"""Opt-in host/live-Codex qualification (Docker agents are optional). Owns only its fresh state and jobs.
 
-Run on the execution host, with the worker image already built. No credentials
-are copied. --auth-file is projected read-only by the isolated service.
+Run on the execution host using its installed Codex and normal login. No credentials
+are copied. An optional Docker-agent mode requires an image and auth projection.
 """
 import argparse
 import json
@@ -26,7 +26,7 @@ class Qualification:
         self.root.mkdir(parents=True, exist_ok=False)
         self.state = self.root / 'state'
         self.repo = Path(__file__).resolve().parents[1]
-        self.image_id = self.docker('image', 'inspect', args.image, '--format', '{{.Id}}').strip()
+        self.image_id = self.docker('image', 'inspect', args.image, '--format', '{{.Id}}').strip() if args.engine == 'docker' else None
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
             self.port = sock.getsockname()[1]
@@ -45,7 +45,7 @@ class Qualification:
         item = {'check': name, 'passed': True, **details}
         self.checks.append(item)
         save_json(self.root / 'qualification.json', {'format': 'runner-qualification/v1',
-                  'image': self.args.image, 'image_id': self.image_id, 'checks': self.checks})
+                  'engine': self.args.engine, 'image': self.args.image if self.image_id else None, 'image_id': self.image_id, 'checks': self.checks})
         print(json.dumps(item), flush=True)
 
     def wait(self, predicate, seconds=120):
@@ -61,13 +61,16 @@ class Qualification:
 
     def start_server(self):
         env = os.environ.copy()
-        env.update(RESEARCH_RUNNER_READ_TOKEN=self.read_token,
-                   RESEARCH_RUNNER_CONTROL_TOKEN=self.control_token,
-                   RESEARCH_RUNNER_CODEX_AUTH_FILE=str(Path(self.args.auth_file).expanduser().resolve()))
+        env.update(RESEARCH_RUNNER_READ_TOKEN=self.read_token, RESEARCH_RUNNER_CONTROL_TOKEN=self.control_token)
+        env.pop('RESEARCH_RUNNER_CODEX_AUTH_FILE', None)
+        if self.args.engine == 'docker':
+            env['RESEARCH_RUNNER_CODEX_AUTH_FILE'] = str(Path(self.args.auth_file).expanduser().resolve())
+        if self.args.codex_bin:
+            env['RESEARCH_RUNNER_CODEX_BIN'] = self.args.codex_bin
         if self.log:
             self.log.close()
         self.log = (self.root / f'controller-{time.time_ns()}.log').open('wb')
-        self.process = subprocess.Popen([sys.executable, '-m', 'runner.cli', '--state', str(self.state),
+        self.process = subprocess.Popen([sys.executable, '-m', 'runner.cli', '--state', str(self.state), '--engine', self.args.engine,
                                          'serve', '--host', '127.0.0.1', '--port', str(self.port)],
                                         stdout=self.log, stderr=self.log, env=env, start_new_session=True)
         def ready():
@@ -82,7 +85,10 @@ class Qualification:
         shutil.copytree(self.repo / 'sample-mvp', source)
         manifest = json.loads((source / 'manifest.json').read_text())
         manifest.update(name=name, adapter='codex' if brief else 'fixture')
-        manifest['runtime'].update(image=self.args.image, image_id=self.image_id)
+        if self.image_id:
+            manifest['runtime'].update(image=self.args.image, image_id=self.image_id)
+        else:
+            manifest['runtime'] = {'sdk': 'openai-codex==0.159.0'}
         manifest['resources'].update(time_seconds=budget, memory_mb=2048)
         manifest['policy'] = {'finalization_seconds': budget / 3,
                               'termination_seconds': min(10, budget / 6), 'checkpoint_seconds': 1}
@@ -130,19 +136,19 @@ class Qualification:
         self.start(jid, 'fixture-timeout-start')
         status = self.terminal(jid, 30)
         assert (status['state'], status['outcome'], status['result']['reason']) == ('finished', 'partial', 'budget_exhausted'), status
-        self.record('docker-soft-timeout', job_id=jid)
+        self.record(self.args.engine + '-soft-timeout', job_id=jid)
         jid = self.submit('fixture-forced', mode='unresponsive', seconds=60, budget=9)
         self.start(jid, 'fixture-forced-start')
         status = self.terminal(jid, 30)
         assert status['state'] == 'interrupted' and status['publication'] and status['outcome'] is None, status
         assert status['error'] == 'deadline forced', status
         self.reader.collect(jid, self.root / 'forced-collected', apply=True)
-        self.record('docker-forced-deadline-partials', job_id=jid)
+        self.record(self.args.engine + '-forced-deadline-partials', job_id=jid)
         jid = self.submit('fixture-blocked', mode='blocked')
         self.start(jid, 'fixture-blocked-start')
         status = self.terminal(jid)
         assert status['state'] == 'finished' and status['outcome'] == 'blocked', status
-        self.record('docker-early-blocked', job_id=jid)
+        self.record(self.args.engine + '-early-blocked', job_id=jid)
 
         brief = '''This is a session recovery qualification, not research. Do not search externally.
 The first operator message supplies an opaque memory marker. Keep it only in the
@@ -165,16 +171,21 @@ handoff. Never launch detached processes or touch files outside this workspace.'
         assert before['thread_id'], before
         generation = before['publication']['generation']
         save_json(self.root / 'before-restart.json', before)
-        owned = self.docker('ps', '-q', '--filter', 'label=research-runner.root=' + str(self.state)).split()
-        assert owned
-        inspected = json.loads(self.docker('inspect', owned[0]))[0]
-        mounts = {m['Destination']: m['RW'] for m in inspected['Mounts']}
-        assert mounts['/session/auth.json'] is False and mounts['/job/brief.md'] is False
-        assert inspected['HostConfig']['CapDrop'] == ['ALL']
-        assert inspected['HostConfig']['Memory'] == 2048 * 1024 * 1024
-        self.record('docker-isolation', user=inspected['Config']['User'], mounts=mounts,
-                    memory_bytes=inspected['HostConfig']['Memory'],
-                    cpu_nanocpus=inspected['HostConfig']['NanoCpus'])
+        owned = []
+        if self.args.engine == 'docker':
+            owned = self.docker('ps', '-q', '--filter', 'label=research-runner.root=' + str(self.state)).split()
+            assert owned
+            inspected = json.loads(self.docker('inspect', owned[0]))[0]
+            mounts = {m['Destination']: m['RW'] for m in inspected['Mounts']}
+            assert mounts['/session/auth.json'] is False and mounts['/job/brief.md'] is False
+            assert inspected['HostConfig']['CapDrop'] == ['ALL']
+            assert inspected['HostConfig']['Memory'] == 2048 * 1024 * 1024
+            self.record('docker-isolation', user=inspected['Config']['User'], mounts=mounts,
+                        memory_bytes=inspected['HostConfig']['Memory'],
+                        cpu_nanocpus=inspected['HostConfig']['NanoCpus'])
+        else:
+            assert before['execution_engine'] == 'host' and before['session_store'] == 'host_codex_home'
+            self.record('native-codex-session-store', job_id=jid)
         self.process.kill(); self.process.wait(timeout=15)
         self.start_server()
         interrupted = self.status(jid)
@@ -223,8 +234,10 @@ nonempty summary, next_action and blockers []. Then finish. No detached work.'''
         assert acknowledged, 'model closeout did not acknowledge finalize delivery'
         self.reader.collect(jid, self.root / 'finalize-collected', apply=True)
         self.record('live-graceful-finalize', job_id=jid, thread_id=status['thread_id'])
-        assert not self.docker('ps', '-q', '--filter', 'label=research-runner.root=' + str(self.state)).strip()
-        self.record('owned-containers-cleaned')
+        if self.args.engine == 'docker':
+            assert not self.docker('ps', '-q', '--filter', 'label=research-runner.root=' + str(self.state)).strip()
+        assert not list((self.state / 'jobs').glob('*/runtime.json'))
+        self.record('owned-execution-cleaned', engine=self.args.engine)
 
     def close(self):
         if self.process and self.process.poll() is None:
@@ -240,21 +253,26 @@ nonempty summary, next_action and blockers []. Then finish. No detached work.'''
             except subprocess.TimeoutExpired:
                 self.process.kill(); self.process.wait(timeout=5)
         # Only labelled containers owned by this newly created qualification state.
-        for cid in self.docker('ps', '-aq', '--filter', 'label=research-runner.root=' + str(self.state)).split():
-            self.docker('rm', '-f', cid)
+        if self.args.engine == 'docker':
+            for cid in self.docker('ps', '-aq', '--filter', 'label=research-runner.root=' + str(self.state)).split():
+                self.docker('rm', '-f', cid)
         if self.log:
             self.log.close()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--engine', choices=['host', 'docker'], default='host')
+    parser.add_argument('--codex-bin', help='operator-selected native Codex executable')
     parser.add_argument('--image', default='research-runner-worker:0.2.0')
-    parser.add_argument('--auth-file', required=True)
+    parser.add_argument('--auth-file', help='only for optional containerized-agent mode')
     parser.add_argument('--output', required=True, help='new private qualification directory')
-    parser.add_argument('--apply', action='store_true', help='launch disposable Docker and live model work')
+    parser.add_argument('--apply', action='store_true', help='launch isolated runner state and short live model work')
     args = parser.parse_args()
+    if args.engine == 'docker' and not args.auth_file:
+        parser.error('Docker-agent qualification requires --auth-file')
     if not args.apply:
-        print(json.dumps({'preview': True, 'image': args.image, 'output': str(Path(args.output).resolve()), 'live_model_requests': True}))
+        print(json.dumps({'preview': True, 'engine': args.engine, 'image': args.image if args.engine == 'docker' else None, 'output': str(Path(args.output).resolve()), 'live_model_requests': True}))
         return
     qualification = Qualification(args)
     try:

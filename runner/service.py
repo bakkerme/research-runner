@@ -19,14 +19,14 @@ from .store import ACTIVE, Store
 
 
 class Service:
- def __init__(self,root,engine='docker',image='research-runner-worker:0.2.0'):
+ def __init__(self,root,engine='host',image='research-runner-worker:0.2.0'):
   self.root=pathlib.Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
   self._owner=(self.root/'service.lock').open('a+b')
   try:fcntl.flock(self._owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
   except BlockingIOError:raise RuntimeError('another research-runner service owns this state directory')
   self.store=Store(self.root/'state.sqlite3');self.engine=engine;self.image=image
   # Explicit host configuration, never selected by a submitted workload.
-  auth=os.environ.get('RESEARCH_RUNNER_CODEX_AUTH_FILE')
+  auth=os.environ.get('RESEARCH_RUNNER_CODEX_AUTH_FILE') if engine=='docker' else None
   self.auth_file=pathlib.Path(auth).expanduser().resolve(strict=True) if auth else None
   if self.auth_file and (not self.auth_file.is_file() or ':' in str(self.auth_file)):
    raise ValueError('Codex auth projection must name a regular host file')
@@ -102,6 +102,7 @@ class Service:
    if j['state'] not in ACTIVE and (jid in self.procs or (p/'runtime.json').exists()):
     raise ValueError('previous worker cleanup is not yet confirmed; reconcile before resume')
    if self.engine=='docker':
+    if not {'image','image_id'}<=set(m['runtime']):raise ValueError('containerized Codex requires an explicitly pinned worker image')
     inspect=subprocess.run(['docker','image','inspect',m['runtime']['image'],'--format','{{.Id}}'],capture_output=True,text=True)
     if inspect.returncode or inspect.stdout.strip()!=m['runtime']['image_id']:raise ValueError('runtime image digest mismatch')
     info=subprocess.run(['docker','info','--format','{{json .SecurityOptions}}'],capture_output=True,text=True)
@@ -109,7 +110,7 @@ class Service:
     options=json.loads(info.stdout)
     if not isinstance(options,list) or any(not isinstance(o,str) for o in options):raise ValueError('invalid Docker security options')
     docker_user='0:0' if any(o.split(',')[0]=='name=rootless' for o in options) else str(os.getuid())+':'+str(os.getgid())
-   attempt,token,created,result=self.store.start_attempt(jid,key,input_text,m['resources']['time_seconds'],m.get('policy'))
+   attempt,token,created,result=self.store.start_attempt(jid,key,input_text,m['resources']['time_seconds'],m.get('policy'),self.engine)
    if not created:return result
    for folder in ('inbox','requests'):
     for old in (p/folder).glob('*.json'):old.unlink()
@@ -136,6 +137,8 @@ class Service:
    if j['thread_id'] and m['adapter']=='codex':cmd+=['--thread',j['thread_id']]
    if input_text:cmd+=['--input',input_text]
    env=os.environ.copy()
+   for private in ('RESEARCH_RUNNER_READ_TOKEN','RESEARCH_RUNNER_CONTROL_TOKEN','RESEARCH_RUNNER_CODEX_AUTH_FILE'):
+    env.pop(private,None)
    if self.engine=='docker':env.pop('OPENAI_API_KEY',None)
    try:proc=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1,env=env,start_new_session=True)
    except Exception as e:self.store.finish(jid,attempt,token,'failed',str(e));raise
@@ -344,6 +347,7 @@ class Service:
   j.update(format='runner-status/v1',remaining_seconds=max(0,j['deadline']-time.time()) if j['deadline'] else None,
            last_event=last['seq'] or 0,last_activity=last['ts'],pending_approvals=pending,
            publication=self.store.publication(jid),validation='not_run')
+  j['session_store']='host_codex_home' if j['execution_engine']=='host' else ('job_session_mount' if j['execution_engine']=='docker' else 'legacy_unknown')
   if j['result']:j['result']=json.loads(j['result'])
   return j
 

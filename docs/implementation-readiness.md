@@ -1,56 +1,48 @@
-# MVP delivery and host readiness
+# Native-agent MVP readiness
 
-The [MVP contract](job-runner-spec.md) is the integration target. This checklist
-separates implemented controller behavior from target-host qualification.
+The [MVP contract](job-runner-spec.md) uses **host Codex by default**. Payloads may
+use containers for dependency tools independently of that execution choice.
 
-Implemented in 0.2.0:
+Implemented:
 
-- V1 compatibility and deterministic v2 packages with a small inline policy.
-- Runtime-validated result/checkpoint/policy contracts and exported JSON Schemas.
-- Persistent cumulative deadlines, finalization and early blocked/partial finish.
-- Attempt fencing, restart reconciliation and retained immutable generations.
-- Shared dashboard/HTTP status, bounded event replay and SSE reconnect cursors.
-- Optional distinct read/control tokens and approval request details.
-- Remote preview/apply submission, durable receipts and verified collection.
+- Deterministic v1/v2 packages; native v2 runtime needs only the SDK pin.
+- Host Codex with normal login/config/session storage; explicit executable override.
+- Persistent deadlines, early blocked finish, graceful finalization and partial outputs.
+- Recorded execution engine, attempt fencing, same-host thread recovery and receipts.
+- Dashboard/API monitoring, read/control roles and verified generation collection.
 
-DGX rootless ARM64 qualification passed on 18 October 2026, including live Codex
-thread recovery and finalize steering. See [retained results](dgx-qualification.md).
-The existing service was left unchanged; the tested checkout is isolated.
-Repeat qualification after deploying or changing credentials/runtime versions.
+[DGX native qualification](dgx-qualification.md) passed on 18 October 2026 with its
+installed Codex 0.162.1 and SDK 0.159.0. The old live service was left untouched.
 
-Before the first real unattended workload:
+Before deploying/using a new host:
 
-- [ ] Build the 0.2.0 worker image on the actual host. Update the workload image
-  digest and reassemble. Test resource limits, rootless/ordinary ownership,
-  read-only inputs and working directories there.
-- [ ] Provision Codex authentication independently of package/workspace/exports.
-  Run an authenticated model task and confirm result/handoff contract behavior.
-- [ ] Exercise finalize steering, approval expiry, immediate stop and forced
-  termination with the real image. Fixture success does not prove model behavior.
-- [ ] Exercise controller restart and session continuation, confirming original
-  deadlines and published artifacts remain intact.
-- [ ] Configure token roles for independent monitors, inspect capability output,
-  and verify dashboard plus agent access from intended clients.
-- [ ] Run a short scoped workload through submission, monitoring and collection.
-  Check content and workload acceptance evidence independently of runner hashes.
+- [ ] Install runner dependencies and Codex; check the operator's normal login.
+  Set RESEARCH_RUNNER_CODEX_BIN if Codex is absent from the service's PATH.
+- [ ] Keep CODEX_HOME/user stable across resumes. Native sessions are stored there,
+  outside workload snapshots. Do not copy credentials into payloads.
+- [ ] Run a short native qualification; verify deadline, controller restart,
+  recall, finalize, artifact collection and owned-agent cleanup.
+- [ ] Configure monitor/control roles and verify intended clients can connect.
+- [ ] For optional dependency containers, let workload tooling preflight engine,
+  images, assets, bounded ownership and cleanup. Those containers are not agent
+  workers and are not automatically supervised by --engine.
+- [ ] Verify workload conclusions independently of runner integrity checks.
 
-Deferred until real workflows justify expansion: dataset import/storage,
-external worker brokers, automatic retries/continuation, scheduling, domain
-validator execution and distributed/concurrent jobs. Capability negotiation
-explicitly reports unsupported features. End a blocked run with a useful handoff
-rather than expanding the platform to avoid reporting a missing input.
-
-Repeatable opt-in host probe (from an installed checkout on that host):
+Repeatable probe (no Docker or credential file required):
 
 ```sh
-.venv/bin/python tools/qualify_host.py --auth-file /private/host/auth.json --output runs/NEW_QUALIFICATION
-.venv/bin/python tools/qualify_host.py --auth-file /private/host/auth.json --output runs/NEW_QUALIFICATION --apply
+.venv/bin/python tools/qualify_host.py --codex-bin /path/to/codex --output runs/NEW_QUALIFICATION
+.venv/bin/python tools/qualify_host.py --codex-bin /path/to/codex --output runs/NEW_QUALIFICATION --apply
 ```
 
-Preview does not read credentials or launch work. Apply uses a fresh state,
-loopback-only authenticated controller, disposable containers and two short live
-model jobs. It simulates abrupt death of its own controller, verifies marker
-recall in the same thread, and collects outputs with read-only access. Its cleanup
-is restricted to containers labelled with its newly created state directory.
-Output contains private session content; keep it outside Git and do not export
-the job session directory. Long-running credential refresh is not qualified.
+Apply owns a fresh private state and loopback controller. It tests fixture
+lifecycles plus two short live model jobs, kills only its own controller, verifies
+same-thread recall and collects using read-only credentials. Output contains
+private session context and must stay outside Git. It does not upgrade a running
+service. Native operation has no container CPU/memory/input-mount enforcement;
+capabilities state the actual boundary.
+
+An explicit --engine docker probe remains available for the separate optional
+containerized-agent mode; that mode additionally requires --image and --auth-file.
+Its credential refresh and cross-host migration are not qualified. Neither is a
+requirement for native Codex or workload-owned emulator/tool containers.

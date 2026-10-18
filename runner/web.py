@@ -23,7 +23,7 @@ function render(e){let d=e.data;if(e.kind==='approval_request'){let p=document.c
 async function decide(d,decision){try{await api(`/api/jobs/${current}/approve`,{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':key()},body:JSON.stringify({request_id:d.id,attempt:d.attempt,turn_id:d.turn_id,decision})})}catch(e){alert(e.message)}}
 function openJob(id){if(es)es.close();current=id;seen=0;lastState=null;document.querySelector('#events').textContent='';document.querySelector('#findings').textContent='';document.querySelector('#artifacts').textContent='';refresh();es=new EventSource(`/api/jobs/${id}/events?after=0`);es.onmessage=x=>{let e=JSON.parse(x.data);if(e.seq>seen){seen=e.seq;render(e)}};es.onerror=()=>{}}setInterval(()=>refresh().catch(()=>{}),3000);refresh().catch(()=>{});</script></body></html>'''
 
-def app(root,engine='docker',image='research-runner-worker:0.2.0'):
+def app(root,engine='host',image='research-runner-worker:0.2.0'):
  from .protocol import capabilities,schemas
  from .package import digest,MAX_TOTAL
  import secrets
@@ -52,7 +52,7 @@ def app(root,engine='docker',image='research-runner-worker:0.2.0'):
  @a.get('/')
  def page():return HTMLResponse(PAGE)
  @a.get('/api/capabilities')
- def caps():return dict(capabilities(),access='read_control_tokens' if read_token else 'trusted_network')
+ def caps():return dict(capabilities(),engine=engine,access='read_control_tokens' if read_token else 'trusted_network',resource_enforcement='container_limits' if engine=='docker' else 'deadline_and_owned_processes')
  @a.get('/api/schemas')
  def contract_schemas():return schemas()
  @a.get('/api/jobs')
