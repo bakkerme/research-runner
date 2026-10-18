@@ -1,0 +1,21 @@
+# Host-local environments, state, dependencies, and Docker configuration.
+/.venv/
+/var/
+/wheelhouse/
+/.docker/
+/.git/
+/.env
+/.env.*
+/research_runner.egg-info/
+__pycache__/
+.pytest_cache/
+.DS_Store
+
+# Generated packages and source archives may contain stale image pins/code.
+*.rrpkg
+*.tar.gz
+*.patch
+
+# Preserve the image IDs already configured on DGX.
+/sample/manifest.json
+/sample-codex/manifest.json

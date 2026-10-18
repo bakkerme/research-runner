@@ -1,0 +1,6 @@
+.venv
+var
+*.rrpkg
+*.tar.gz
+.git
+__pycache__

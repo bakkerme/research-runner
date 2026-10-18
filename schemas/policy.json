@@ -1,0 +1,28 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "finalization_seconds": {
+      "exclusiveMinimum": 0,
+      "title": "Finalization Seconds",
+      "type": "number"
+    },
+    "termination_seconds": {
+      "exclusiveMinimum": 0,
+      "title": "Termination Seconds",
+      "type": "number"
+    },
+    "checkpoint_seconds": {
+      "maximum": 300,
+      "minimum": 0.1,
+      "title": "Checkpoint Seconds",
+      "type": "number"
+    }
+  },
+  "required": [
+    "finalization_seconds",
+    "termination_seconds",
+    "checkpoint_seconds"
+  ],
+  "title": "Policy",
+  "type": "object"
+}

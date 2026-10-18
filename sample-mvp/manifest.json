@@ -1,0 +1,34 @@
+{
+  "format": "research-package/v2",
+  "name": "generic-lifecycle-fixture",
+  "adapter": "fixture",
+  "runtime": {
+    "image": "research-runner-worker:0.2.0",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "sdk": "openai-codex==0.159.0",
+    "image_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "brief": "brief.md",
+  "agents": "AGENTS.md",
+  "skills": [],
+  "inputs": [
+    "inputs/fixture.json"
+  ],
+  "resources": {
+    "cpu": 1,
+    "memory_mb": 1024,
+    "time_seconds": 60
+  },
+  "required_outputs": [
+    "outputs/result.json",
+    "outputs/handoff.md"
+  ],
+  "policy": {
+    "finalization_seconds": 15,
+    "termination_seconds": 5,
+    "checkpoint_seconds": 1
+  }
+}

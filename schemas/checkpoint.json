@@ -1,0 +1,37 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "runner-checkpoint/v1",
+      "title": "Format",
+      "type": "string"
+    },
+    "summary": {
+      "maxLength": 8000,
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    },
+    "next_action": {
+      "maxLength": 8000,
+      "title": "Next Action",
+      "type": "string"
+    },
+    "blockers": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100,
+      "title": "Blockers",
+      "type": "array"
+    }
+  },
+  "required": [
+    "format",
+    "summary",
+    "next_action",
+    "blockers"
+  ],
+  "title": "Checkpoint",
+  "type": "object"
+}

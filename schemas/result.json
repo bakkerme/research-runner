@@ -1,0 +1,58 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "runner-result/v1",
+      "title": "Format",
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "complete",
+        "partial",
+        "blocked"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "reason": {
+      "enum": [
+        "scope_complete",
+        "budget_exhausted",
+        "no_actionable_work",
+        "user_requested"
+      ],
+      "title": "Reason",
+      "type": "string"
+    },
+    "summary": {
+      "maxLength": 8000,
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    },
+    "next_action": {
+      "maxLength": 8000,
+      "title": "Next Action",
+      "type": "string"
+    },
+    "blockers": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100,
+      "title": "Blockers",
+      "type": "array"
+    }
+  },
+  "required": [
+    "format",
+    "outcome",
+    "reason",
+    "summary",
+    "next_action",
+    "blockers"
+  ],
+  "title": "Result",
+  "type": "object"
+}

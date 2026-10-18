@@ -1,0 +1,29 @@
+{
+  "format": "research-package/v1",
+  "name": "blue-sky-codex",
+  "adapter": "codex",
+  "runtime": {
+    "image": "research-runner-worker:0.1.0",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "sdk": "openai-codex==0.159.0",
+    "image_id": "sha256:a6cdc4adc7d00c15aa673d4d83018d90b29f840d332bf1e74dac27ab622b1fd7"
+  },
+  "brief": "brief.md",
+  "agents": "AGENTS.md",
+  "skills": [],
+  "inputs": [
+    "inputs/question.txt"
+  ],
+  "resources": {
+    "cpu": 1,
+    "memory_mb": 1024,
+    "time_seconds": 300
+  },
+  "required_outputs": [
+    "outputs/report.md",
+    "outputs/findings.json"
+  ]
+}

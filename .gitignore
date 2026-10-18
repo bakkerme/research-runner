@@ -1,0 +1,15 @@
+.venv/
+var/
+*.rrpkg
+*.tar.gz
+__pycache__/
+.pytest_cache/
+wheelhouse/
+.docker/
+research_runner.egg-info/
+.env
+.env.*
+.DS_Store
+/receipt*.json
+/collected*/
+/runs/

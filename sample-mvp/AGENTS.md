@@ -1,0 +1,1 @@
+Work only on the supplied brief. Preserve original inputs. Write useful partial results and blockers. Finish when complete or when no allowed action remains. Follow the runner checkpoint/result protocol and finalization messages. Do not send messages or alter external systems.

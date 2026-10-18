@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "name",
+    "adapter",
+    "runtime",
+    "brief",
+    "agents",
+    "skills",
+    "inputs",
+    "resources",
+    "required_outputs",
+    "policy"
+  ],
+  "properties": {
+    "format": {
+      "const": "research-package/v2"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "adapter": {
+      "enum": [
+        "fixture",
+        "codex"
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "required": [
+        "image",
+        "image_id",
+        "sdk"
+      ],
+      "properties": {
+        "image": {
+          "type": "string"
+        },
+        "image_id": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "sdk": {
+          "const": "openai-codex==0.159.0"
+        }
+      }
+    },
+    "brief": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Normalized relative POSIX path; no traversal, links or reserved input paths."
+    },
+    "agents": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Normalized relative POSIX path; no traversal, links or reserved input paths."
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Normalized relative POSIX path; no traversal, links or reserved input paths."
+      },
+      "uniqueItems": true
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Normalized relative POSIX path; no traversal, links or reserved input paths."
+      },
+      "uniqueItems": true
+    },
+    "resources": {
+      "type": "object",
+      "required": [
+        "cpu",
+        "memory_mb",
+        "time_seconds"
+      ],
+      "properties": {
+        "cpu": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 8
+        },
+        "memory_mb": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 32768
+        },
+        "time_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 86400
+        }
+      }
+    },
+    "required_outputs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Normalized relative POSIX path; no traversal, links or reserved input paths."
+      },
+      "uniqueItems": true,
+      "allOf": [
+        {
+          "contains": {
+            "const": "outputs/result.json"
+          }
+        },
+        {
+          "contains": {
+            "const": "outputs/handoff.md"
+          }
+        }
+      ]
+    },
+    "policy": {
+      "additionalProperties": false,
+      "properties": {
+        "finalization_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Finalization Seconds",
+          "type": "number"
+        },
+        "termination_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Termination Seconds",
+          "type": "number"
+        },
+        "checkpoint_seconds": {
+          "maximum": 300,
+          "minimum": 0.1,
+          "title": "Checkpoint Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "finalization_seconds",
+        "termination_seconds",
+        "checkpoint_seconds"
+      ],
+      "title": "Policy",
+      "type": "object"
+    }
+  },
+  "description": "Cross-field/path, dependency and archive constraints are additionally checked by research-runner verify."
+}
