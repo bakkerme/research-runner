@@ -65,6 +65,7 @@ def capabilities():
                    'files': 512, 'contract_bytes': 65536},
         'features': {'bounded_runs': True, 'graceful_finalize': True,
                      'worker_deadline_failsafe': True,
+                     'host_auth_file_projection': True, 'auth_refresh_qualified': False,
                      'partial_artifacts': True, 'event_paging': True,
                      'datasets': False, 'automatic_retries': False,
                      'automatic_continuation': False, 'external_workers': False,

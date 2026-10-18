@@ -151,6 +151,14 @@ exports. Fixture output is deterministic and labelled fixture, not model evidenc
 The SDK uses its pinned approval handler bridge; live approval/finalize steering
 and restored sessions must be checked on the actual host.
 
+For a short live qualification using an existing host login, the server may set
+`RESEARCH_RUNNER_CODEX_AUTH_FILE` to the existing auth cache path. Only Codex
+workers receive a read-only projection at `/session/auth.json`; credentials are
+not copied into the package, image or workspace. This does not establish token
+refresh for an unattended long run. A credential file mount may leave an empty
+mount-point stub in the host session directory; snapshots deliberately reject
+any `auth.json`, including that stub, rather than risk exporting credentials.
+
 Optional browser tests use headless Chromium/Chrome:
 
 ```sh

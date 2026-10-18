@@ -14,6 +14,15 @@ class Store:
    CREATE TABLE IF NOT EXISTS keys(key TEXT PRIMARY KEY,scope TEXT,result TEXT);
    CREATE TABLE IF NOT EXISTS approvals(id TEXT PRIMARY KEY,job_id TEXT,attempt INTEGER,turn_id TEXT,request_id TEXT,state TEXT,decision TEXT,created REAL);
    CREATE INDEX IF NOT EXISTS events_job ON events(job_id,seq);''')
+   # Idempotency is scoped to operation/job, not globally to the key string.
+   key_columns={r['name']:r['pk'] for r in c.execute('PRAGMA table_info(keys)')}
+   if not key_columns.get('scope'):
+    c.executescript('''BEGIN IMMEDIATE;
+    ALTER TABLE keys RENAME TO keys_legacy;
+    CREATE TABLE keys(key TEXT,scope TEXT,result TEXT,PRIMARY KEY(scope,key));
+    INSERT INTO keys(key,scope,result) SELECT key,scope,result FROM keys_legacy;
+    DROP TABLE keys_legacy;
+    COMMIT;''')
    # Additive migration: historical jobs retain null lifecycle/outcome fields.
    columns={r['name'] for r in c.execute('PRAGMA table_info(jobs)')}
    for name,kind in [('started_at','REAL'),('deadline','REAL'),('finalize_at','REAL'),

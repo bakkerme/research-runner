@@ -25,6 +25,11 @@ class Service:
   try:fcntl.flock(self._owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
   except BlockingIOError:raise RuntimeError('another research-runner service owns this state directory')
   self.store=Store(self.root/'state.sqlite3');self.engine=engine;self.image=image
+  # Explicit host configuration, never selected by a submitted workload.
+  auth=os.environ.get('RESEARCH_RUNNER_CODEX_AUTH_FILE')
+  self.auth_file=pathlib.Path(auth).expanduser().resolve(strict=True) if auth else None
+  if self.auth_file and (not self.auth_file.is_file() or ':' in str(self.auth_file)):
+   raise ValueError('Codex auth projection must name a regular host file')
   self.procs={};self.stopping=set();self.lock=threading.Lock();self.controls=threading.RLock()
   self._kill_orphans();self.store.reconcile()
   known={j['id'] for j in self.store.list()}
@@ -45,6 +50,9 @@ class Service:
   q=subprocess.run(['docker','ps','-aq','--filter','label=research-runner.root='+str(self.root)],capture_output=True,text=True,timeout=10)
   if q.returncode:raise RuntimeError('cannot inspect Docker orphans: '+q.stderr[-500:])
   for cid in q.stdout.splitlines():self._remove_container(cid)
+  # Container removal is verified above; do not leave a dead launcher's marker
+  # blocking every later attempt after a controller restart.
+  for marker in (self.root/'jobs').glob('*/runtime.json'):marker.unlink(missing_ok=True)
 
  def _kill_group(self,pid):
   try:os.killpg(pid,signal.SIGKILL)
@@ -116,6 +124,8 @@ class Service:
     if is_mvp(m):
      for f in declared(m)+['package.json']:
       cmd+=['-v',str((p/'work'/f).resolve())+':/job/'+f+':ro']
+    if m['adapter']=='codex' and self.auth_file:
+     cmd+=['-v',str(self.auth_file)+':/session/auth.json:ro']
     if m['adapter']=='fixture' and os.environ.get('RR_FIXTURE_DELAY'):cmd+=['-e','FIXTURE_DELAY='+os.environ['RR_FIXTURE_DELAY']]
     cmd += [m['runtime']['image'],'python','-m','runner.worker','--work','/job','--session','/session']
    else:
@@ -156,7 +166,7 @@ class Service:
      if is_mvp(m):
       state=self.store.get(jid)['state']
       if state not in ACTIVE:return
-      if now>=soft and state=='running':self.finalize(jid,f'deadline-{attempt}','budget_exhausted')
+      if now>=soft and state=='running':self.finalize(jid,f'deadline-{jid}-{attempt}','budget_exhausted')
       elif state=='finalizing':self._signal_finalize(jid)
       if now-last>=m['policy']['checkpoint_seconds']:
        last=now

@@ -13,6 +13,11 @@ Implemented in 0.2.0:
 - Optional distinct read/control tokens and approval request details.
 - Remote preview/apply submission, durable receipts and verified collection.
 
+DGX rootless ARM64 qualification passed on 18 October 2026, including live Codex
+thread recovery and finalize steering. See [retained results](dgx-qualification.md).
+The existing service was left unchanged; the tested checkout is isolated.
+Repeat qualification after deploying or changing credentials/runtime versions.
+
 Before the first real unattended workload:
 
 - [ ] Build the 0.2.0 worker image on the actual host. Update the workload image
@@ -34,3 +39,18 @@ external worker brokers, automatic retries/continuation, scheduling, domain
 validator execution and distributed/concurrent jobs. Capability negotiation
 explicitly reports unsupported features. End a blocked run with a useful handoff
 rather than expanding the platform to avoid reporting a missing input.
+
+Repeatable opt-in host probe (from an installed checkout on that host):
+
+```sh
+.venv/bin/python tools/qualify_host.py --auth-file /private/host/auth.json --output runs/NEW_QUALIFICATION
+.venv/bin/python tools/qualify_host.py --auth-file /private/host/auth.json --output runs/NEW_QUALIFICATION --apply
+```
+
+Preview does not read credentials or launch work. Apply uses a fresh state,
+loopback-only authenticated controller, disposable containers and two short live
+model jobs. It simulates abrupt death of its own controller, verifies marker
+recall in the same thread, and collects outputs with read-only access. Its cleanup
+is restricted to containers labelled with its newly created state directory.
+Output contains private session content; keep it outside Git and do not export
+the job session directory. Long-running credential refresh is not qualified.

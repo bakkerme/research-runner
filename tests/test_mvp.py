@@ -248,3 +248,20 @@ def test_worker_has_independent_deadline_without_a_controller(tmp_path):
   assert not (work/'outputs/result.json').exists()
  finally:
   if proc.poll() is None:proc.kill();proc.wait(timeout=5)
+
+
+def test_idempotency_keys_are_scoped_and_legacy_keys_migrate(tmp_path):
+ path=tmp_path/'legacy-keys.sqlite3'
+ with sqlite3.connect(path) as c:
+  c.execute('CREATE TABLE keys(key TEXT PRIMARY KEY,scope TEXT,result TEXT)')
+  c.execute('INSERT INTO keys VALUES(?,?,?)',('same-key','old-scope','{}'))
+ store=Store(path)
+ for jid in ('a'*32,'b'*32):
+  store.submit(jid,'fixture','fixture','submit-'+jid,'0'*64)
+  attempt,token,created,response=store.start_attempt(jid,'same-start-key')
+  assert created and attempt==1
+  store.control(jid,'finalize','same-finalize-key',{'running'},'finalizing',{'reason':'budget_exhausted'})
+  assert store.start_attempt(jid,'same-start-key')[3]==response
+  store.finish(jid,attempt,token,'interrupted')
+ with store.db() as c:
+  assert c.execute("SELECT result FROM keys WHERE key='same-key' AND scope='old-scope'").fetchone()['result']=='{}'
