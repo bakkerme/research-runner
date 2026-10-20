@@ -45,6 +45,7 @@ def fixture(root,m,requests):
  blockers=['Fixture requires an unavailable input'] if outcome=='blocked' else []
  (root/'outputs/handoff.md').write_text(config.get('summary','Fixture outcome')+'\n')
  atomic(root/'outputs/result.json',{'format':'runner-result/v1','outcome':outcome,'reason':reason,'summary':config.get('summary','Fixture outcome'),'blockers':blockers,'next_action':'Supply missing input' if blockers else ''})
+ if 'research' in config:atomic(root/'outputs/research.json',config['research'])
  emit('progress',{'message':'Outputs written by fixture adapter'})
 
 

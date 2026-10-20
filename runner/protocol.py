@@ -46,6 +46,85 @@ class Result(Contract):
         return self
 
 
+class Evidence(Contract):
+    id: StrictStr = Field(min_length=1, max_length=100)
+    path: StrictStr
+    description: StrictStr = Field(min_length=1, max_length=8000)
+    sha256: StrictStr | None = Field(default=None, pattern='^[a-f0-9]{64}$')
+
+
+class Finding(Contract):
+    id: StrictStr = Field(min_length=1, max_length=100)
+    claim: StrictStr = Field(min_length=1, max_length=8000)
+    confidence: Literal['supported', 'tentative', 'unresolved']
+    evidence: list[StrictStr] = Field(min_length=1, max_length=100)
+    limitations: list[StrictStr] = Field(max_length=100)
+
+
+class ValidationCheck(Contract):
+    id: StrictStr = Field(min_length=1, max_length=100)
+    method: StrictStr = Field(min_length=1, max_length=8000)
+    status: Literal['passed', 'failed', 'inconclusive', 'not_run']
+    expected: StrictStr = Field(min_length=1, max_length=8000)
+    observed: StrictStr = Field(min_length=1, max_length=8000)
+    evidence: list[StrictStr] = Field(max_length=100)
+
+
+class Dependency(Contract):
+    path: StrictStr = Field(min_length=1, max_length=2000)
+    sha256: StrictStr = Field(pattern='^[a-f0-9]{64}$')
+    provenance: StrictStr = Field(min_length=1, max_length=8000)
+
+
+class Reproduction(Contract):
+    commands: list[StrictStr] = Field(max_length=100)
+    dependencies: list[Dependency] = Field(max_length=512)
+    notes: StrictStr = Field(max_length=8000)
+
+
+class ResearchReport(Contract):
+    """Workload-authored research and validation, separate from transport integrity."""
+    format: Literal['runner-research/v1']
+    scope: StrictStr = Field(min_length=1, max_length=8000)
+    findings: list[Finding] = Field(max_length=100)
+    evidence: list[Evidence] = Field(max_length=100)
+    validation: list[ValidationCheck] = Field(min_length=1, max_length=100)
+    reproduction: Reproduction
+    deliverables: list[StrictStr] = Field(max_length=100)
+    limitations: list[StrictStr] = Field(max_length=100)
+
+    @model_validator(mode='after')
+    def references(self):
+        from .package import relpath
+        ids = [item.id for item in self.evidence]
+        if len(set(ids)) != len(ids):
+            raise ValueError('duplicate evidence ids')
+        for group in (self.findings, self.validation):
+            if len({item.id for item in group}) != len(group):
+                raise ValueError('duplicate finding or validation ids')
+            for item in group:
+                if not set(item.evidence) <= set(ids):
+                    raise ValueError('unknown evidence reference')
+                if isinstance(item, ValidationCheck) and item.status == 'passed' and not item.evidence:
+                    raise ValueError('passed validation requires evidence')
+        for path in self.deliverables + [item.path for item in self.evidence]:
+            if not relpath(path).startswith('outputs/'):
+                raise ValueError('research artifact paths must start with outputs/')
+        return self
+
+
+def validate_research(data, artifacts=None):
+    report = load_contract(ResearchReport, data)
+    if artifacts is not None:
+        for path in report['deliverables'] + [item['path'] for item in report['evidence']]:
+            if path not in artifacts:
+                raise ValueError('research references unpublished artifact: ' + path)
+        for item in report['evidence']:
+            if item['sha256'] and artifacts[item['path']]['sha256'] != item['sha256']:
+                raise ValueError('research evidence hash mismatch: ' + item['path'])
+    return report
+
+
 def load_contract(model, data):
     if len(data) > 65536:
         raise ValueError('contract exceeds 64 KiB')
@@ -59,7 +138,7 @@ def is_mvp(manifest):
 def capabilities():
     from .package import INPUT_MAX_FILE, INPUT_MAX_TOTAL, MAX_ARCHIVE, MAX_FILE, MAX_TOTAL, MAX_FILES
     return {
-        'format': 'runner-capabilities/v1', 'version': '0.2.2',
+        'format': 'runner-capabilities/v1', 'version': '0.3.0',
         'package_formats': ['research-package/v1', 'research-package/v2'],
         'adapters': ['fixture', 'codex'], 'max_running_jobs': 1,
         'default_engine': 'host', 'execution_engines': ['host', 'docker'],
@@ -72,13 +151,13 @@ def capabilities():
                      'partial_artifacts': True, 'event_paging': True,
                      'datasets': False, 'automatic_retries': False,
                      'automatic_continuation': False, 'external_workers': False,
-                     'domain_validation': False, 'budget_extension': False},
+                     'domain_validation': False, 'structured_research': True, 'budget_extension': False},
     }
 
 
 def schemas():
     result = {name: model.model_json_schema() for name, model in
-              [('policy', Policy), ('checkpoint', Checkpoint), ('result', Result)]}
+              [('policy', Policy), ('checkpoint', Checkpoint), ('result', Result), ('research', ResearchReport)]}
     path = {'type': 'string', 'minLength': 1,
             'description': 'Normalized relative POSIX path; no traversal, links or reserved input paths.'}
     paths = {'type': 'array', 'items': path, 'uniqueItems': True}

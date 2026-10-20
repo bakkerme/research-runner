@@ -195,13 +195,13 @@ def test_client_receipt_survives_lost_response_and_collection_is_verified(tmp_pa
  assert client.submit(archive,'s',receipt,True)['id']=='a'*32 and calls==['s','s']
  with pytest.raises(ValueError):client.submit(archive,'different-key',receipt,True)
  data=b'workload-independent output'
- manifest={'generation':1,'files':[{'name':'outputs/output.bin','sha256':digest(data),'size':len(data)}]}
+ manifest={'job_id':'a'*32,'generation':1,'files':[{'name':'outputs/output.bin','sha256':digest(data),'size':len(data)}]}
  monkeypatch.setattr(client,'request',lambda path,**kwargs:data if kwargs.get('raw') else manifest)
  destination=tmp_path/'collected'
  assert client.collect('a'*32,destination)['preview'] and not destination.exists()
  assert client.collect('a'*32,destination,apply=True)['verified']
  assert (destination/'outputs/output.bin').read_bytes()==data
- with pytest.raises(FileExistsError):client.collect('a'*32,destination,apply=True)
+ assert client.collect('a'*32,destination,apply=True)['verified']
  manifest['files'][0]['sha256']='0'*64
  with pytest.raises(ValueError):client.collect('a'*32,tmp_path/'bad',apply=True)
  assert not (tmp_path/'bad/receipt.json').exists()

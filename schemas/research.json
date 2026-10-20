@@ -1,0 +1,287 @@
+{
+  "$defs": {
+    "Dependency": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "provenance": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Provenance",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "provenance"
+      ],
+      "title": "Dependency",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "description"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "claim": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Claim",
+          "type": "string"
+        },
+        "confidence": {
+          "enum": [
+            "supported",
+            "tentative",
+            "unresolved"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Limitations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "claim",
+        "confidence",
+        "evidence",
+        "limitations"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "Reproduction": {
+      "additionalProperties": false,
+      "properties": {
+        "commands": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Commands",
+          "type": "array"
+        },
+        "dependencies": {
+          "items": {
+            "$ref": "#/$defs/Dependency"
+          },
+          "maxItems": 512,
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "notes": {
+          "maxLength": 8000,
+          "title": "Notes",
+          "type": "string"
+        }
+      },
+      "required": [
+        "commands",
+        "dependencies",
+        "notes"
+      ],
+      "title": "Reproduction",
+      "type": "object"
+    },
+    "ValidationCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "method": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Method",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "inconclusive",
+            "not_run"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "expected": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Expected",
+          "type": "string"
+        },
+        "observed": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "title": "Observed",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "status",
+        "expected",
+        "observed",
+        "evidence"
+      ],
+      "title": "ValidationCheck",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Workload-authored research and validation, separate from transport integrity.",
+  "properties": {
+    "format": {
+      "const": "runner-research/v1",
+      "title": "Format",
+      "type": "string"
+    },
+    "scope": {
+      "maxLength": 8000,
+      "minLength": 1,
+      "title": "Scope",
+      "type": "string"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "maxItems": 100,
+      "title": "Findings",
+      "type": "array"
+    },
+    "evidence": {
+      "items": {
+        "$ref": "#/$defs/Evidence"
+      },
+      "maxItems": 100,
+      "title": "Evidence",
+      "type": "array"
+    },
+    "validation": {
+      "items": {
+        "$ref": "#/$defs/ValidationCheck"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "title": "Validation",
+      "type": "array"
+    },
+    "reproduction": {
+      "$ref": "#/$defs/Reproduction"
+    },
+    "deliverables": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100,
+      "title": "Deliverables",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100,
+      "title": "Limitations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "format",
+    "scope",
+    "findings",
+    "evidence",
+    "validation",
+    "reproduction",
+    "deliverables",
+    "limitations"
+  ],
+  "title": "ResearchReport",
+  "type": "object"
+}

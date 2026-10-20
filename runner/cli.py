@@ -1,81 +1,273 @@
-import argparse,ipaddress,json,os,pathlib,subprocess,sys
-from .package import assemble,verify,deploy,digest
-from .service import Service,StateLockedError
+"""Installed producer CLI, with optional offline/server administration."""
+import argparse
+import ipaddress
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+from .package import assemble, verify, deploy
+
 
 def resolve_host(host):
- if host!='tailscale':return host
- try:
-  result=subprocess.run(['tailscale','ip','-4'],capture_output=True,text=True,check=True,timeout=5)
-  address=ipaddress.IPv4Address(result.stdout.strip())
-  if address.is_unspecified or address.is_loopback or address.is_multicast:raise ValueError('not a usable Tailscale address')
- except (OSError,subprocess.SubprocessError,ValueError) as e:
-  raise ValueError('Cannot discover Tailscale IPv4 address. Check that Tailscale is installed and connected, or use serve --host 127.0.0.1 for local access.') from e
- return str(address)
+    if host != 'tailscale':
+        return host
+    try:
+        result = subprocess.run(['tailscale', 'ip', '-4'], capture_output=True, text=True, check=True, timeout=5)
+        address = ipaddress.IPv4Address(result.stdout.strip())
+        if address.is_unspecified or address.is_loopback or address.is_multicast:
+            raise ValueError('not a usable Tailscale address')
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError('Cannot discover Tailscale IPv4 address. Check that Tailscale is installed and connected, or use serve --host 127.0.0.1 for local access.') from error
+    return str(address)
+
+
+def parser():
+    p = argparse.ArgumentParser(prog='research-runner')
+    p.add_argument('--version', action='version', version=__import__('runner').__version__)
+    p.add_argument('--repo', default='.', help='consuming repo or a directory inside it')
+    p.add_argument('--state', default=os.getenv('RESEARCH_RUNNER_STATE'), help='offline/server state only (serve defaults to ./var)')
+    p.add_argument('--engine', choices=['docker', 'host'], default='host')
+    p.add_argument('--image', default='research-runner-worker:0.2.0')
+    p.add_argument('--url', help='explicit remote URL for low-level commands; token from RESEARCH_RUNNER_TOKEN')
+    sub = p.add_subparsers(dest='cmd', required=True)
+    docs = sub.add_parser('docs', help='read the bundled agent quickstart or export docs, schemas and skill')
+    docs.add_argument('--output', help='export directory; preserves modified existing files')
+    init = sub.add_parser('init', help='scaffold a consuming repo and bundled agent skill')
+    init.add_argument('directory', nargs='?', default='.')
+    init.add_argument('--url', dest='init_url')
+    init.add_argument('--name', default='example')
+    init.add_argument('--no-skill', action='store_true')
+    new = sub.add_parser('new', help='add a research definition')
+    new.add_argument('name')
+    package = sub.add_parser('package', help='assemble and verify a repo research definition')
+    package.add_argument('name')
+    attach = sub.add_parser('attach', help='name a dashboard-submitted job locally')
+    attach.add_argument('name')
+    attach.add_argument('job')
+    sub.add_parser('install-skill', help='install the bundled skill into this repo')
+    results = sub.add_parser('results', help='verify and read the most recently pulled structured results')
+    results.add_argument('job')
+    for command, arguments in [
+        ('assemble', ['source', 'archive']), ('verify', ['archive']), ('deploy', ['archive', 'directory']),
+        ('submit', ['archive']), ('start', ['job']), ('stop', ['job']), ('finalize', ['job']),
+        ('status', ['job']), ('events', ['job']), ('collect', ['job', 'output']), ('pull', ['job']),
+        ('monitor', ['job']), ('capabilities', []), ('schemas', []), ('download', ['job', 'name', 'output']),
+        ('snapshot', ['job', 'output']), ('restore', ['archive', 'directory']),
+    ]:
+        item = sub.add_parser(command)
+        for argument in arguments:
+            item.add_argument(argument)
+        if command in ('submit', 'start', 'stop', 'finalize'):
+            item.add_argument('--key', help='required in low-level mode; repo mode persists identities automatically')
+        if command in ('submit', 'start', 'stop', 'finalize', 'collect', 'pull'):
+            item.add_argument('--apply', action='store_true', help='apply; otherwise preview')
+        if command == 'submit':
+            item.add_argument('--receipt', help='required for low-level remote submission')
+            item.add_argument('--run', help='local experiment name (defaults to definition name)')
+        if command in ('events', 'monitor'):
+            item.add_argument('--after', type=int, default=None if command == 'monitor' else 0)
+        if command == 'events':
+            item.add_argument('--limit', type=int, default=100)
+        if command in ('collect', 'pull'):
+            item.add_argument('--generation', type=int)
+        if command == 'start':
+            item.add_argument('--input')
+        if command == 'monitor':
+            item.add_argument('--json', action='store_true', help='emit every event and status as NDJSON')
+            item.add_argument('--interval', type=float, default=2)
+            item.add_argument('--timeout', type=float, help='maximum monitoring seconds; Ctrl-C exits without controlling the job')
+    serve = sub.add_parser('serve')
+    serve.add_argument('--host', default='tailscale')
+    serve.add_argument('--port', type=int, default=8765)
+    return p
+
+
+def emit(value):
+    print(json.dumps(value, indent=2), flush=True)
+
+
+def progress(value):
+    print(f"{value['files']}/{value['total_files']} files, {value['bytes']}/{value['total_bytes']} bytes: {value['name']}" + (' (verified locally)' if value['reused'] else ''), file=sys.stderr, flush=True)
+
+
+def monitor_message(message, as_json):
+    if as_json:
+        print(json.dumps(message), flush=True)
+    elif message['kind'] == 'status':
+        status = message['status']
+        parts = [status['state'], status.get('outcome')]
+        if status.get('remaining_seconds') is not None:
+            parts.append(str(max(0, int(status['remaining_seconds']))) + 's remaining')
+        if status.get('pending_approvals'):
+            parts.append('awaiting operator approval')
+        if status.get('error'):
+            parts.append(status['error'])
+        print(' | '.join(str(part) for part in parts if part), flush=True)
+    else:
+        event = message['event']
+        if event.get('kind') == 'artifact':
+            return
+        data = event.get('data', {})
+        detail = data.get('message') or data.get('method') or ''
+        print(f"[{event['seq']}] {event.get('kind', 'event')}: {str(detail)[:240]}", flush=True)
+
+
+def _main(p, a):
+    if a.cmd == 'docs':
+        from .documentation import documents, export_documents
+        if a.output:
+            return export_documents(a.output)
+        print(documents()['docs/agent-quickstart.md'], end='')
+        return None
+    from .client import Client
+    from .repo import ResearchRepo, CONFIG
+    if a.cmd == 'init':
+        repo = ResearchRepo.init(a.directory, a.init_url or a.url or 'http://127.0.0.1:8765', a.name, not a.no_skill)
+        return {'repo': str(repo.root), 'definition': a.name, 'next': f'Edit research/{a.name}/inputs/question.md, then package {a.name}'}
+    if a.cmd == 'assemble':
+        return assemble(a.source, a.archive)
+    if a.cmd == 'verify':
+        manifest, inventory = verify(a.archive)
+        return {'manifest': manifest, 'files': inventory}
+    if a.cmd == 'deploy':
+        return deploy(a.archive, a.directory)
+    if a.cmd == 'schemas':
+        from .protocol import schemas
+        return schemas()
+
+    # Explicit --url always selects low-level HTTP. Otherwise discover repo config.
+    root = Path(a.repo).resolve()
+    configured = any((path / CONFIG).is_file() for path in (root, *root.parents))
+    repo_commands = {'new', 'package', 'attach', 'install-skill', 'results', 'submit', 'start', 'stop', 'finalize', 'status', 'events', 'monitor', 'pull', 'capabilities'}
+    if not a.url and (configured or a.cmd in {'new', 'package', 'attach', 'install-skill', 'results', 'pull', 'monitor'} ) and a.cmd in repo_commands:
+        repo = ResearchRepo(a.repo)
+        if a.cmd == 'new':
+            return {'definition': repo.new(a.name)}
+        if a.cmd == 'package':
+            return repo.package(a.name)
+        if a.cmd == 'install-skill':
+            return {'skill': repo.install_skill()}
+        if a.cmd == 'attach':
+            return repo.attach(a.name, a.job)
+        if a.cmd == 'results':
+            return repo.results(a.job)
+        if a.cmd == 'submit':
+            if a.key or a.receipt:
+                p.error('repo submit manages keys/receipts; use --url for raw archive submission')
+            return repo.submit(a.archive, a.run, a.apply)
+        if a.cmd in ('start', 'stop', 'finalize'):
+            body = {'input': a.input} if a.cmd == 'start' and a.input else None
+            return repo.control(a.job, a.cmd, a.apply, a.key, body)
+        if a.cmd == 'status':
+            return repo.status(a.job)
+        if a.cmd == 'events':
+            return repo.events(a.job, a.after, a.limit)
+        if a.cmd == 'monitor':
+            for event in repo.monitor(a.job, after=a.after, interval=a.interval, timeout=a.timeout):
+                monitor_message(event, a.json)
+            return None
+        if a.cmd == 'pull':
+            return repo.pull(a.job, a.generation, a.apply, progress)
+        if a.cmd == 'capabilities':
+            return repo.client.capabilities()
+
+    if a.url:
+        client = Client(a.url)
+        if a.cmd in ('submit', 'start', 'stop', 'finalize') and not a.key:
+            p.error('low-level control requires --key')
+        if a.cmd == 'submit':
+            if not a.receipt:
+                p.error('remote submission requires --receipt')
+            return client.submit(a.archive, a.key, a.receipt, a.apply)
+        if a.cmd in ('start', 'stop', 'finalize'):
+            return client.control(a.job, a.cmd, a.key, a.apply, {'input': a.input} if a.cmd == 'start' and a.input else {})
+        if a.cmd == 'status':
+            return client.status(a.job)
+        if a.cmd == 'events':
+            return client.events(a.job, a.after, a.limit)
+        if a.cmd == 'capabilities':
+            return client.capabilities()
+        if a.cmd == 'collect':
+            return client.collect(a.job, a.output, a.generation, a.apply, progress)
+        if a.cmd == 'monitor':
+            for event in client.monitor(a.job, after=a.after or 0, interval=a.interval, timeout=a.timeout):
+                monitor_message(event, a.json)
+            return None
+        p.error('command not supported over HTTP')
+
+    if a.cmd == 'capabilities':
+        from .protocol import capabilities
+        return capabilities()
+    if a.cmd == 'collect':
+        p.error('collection requires --url; use pull NAME in a configured repo')
+    if a.cmd not in ('serve', 'restore') and not a.state:
+        p.error('no repo configuration; run init --url URL or use --url. Offline administration requires explicit --state')
+    if a.cmd == 'serve' and not a.state:
+        a.state = './var'
+    # Server-only imports must stay below producer dispatch (including --help).
+    try:
+        from .service import Service, StateLockedError
+        if a.cmd == 'serve':
+            host = resolve_host(a.host)
+            import uvicorn
+            from .web import app
+            application = app(a.state, a.engine, a.image)
+            url_host = '[' + host + ']' if ':' in host else host
+            application.state.service.set_dashboard_url(f'http://{url_host}:{a.port}')
+            print(f'Dashboard: http://{url_host}:{a.port}', flush=True)
+            uvicorn.run(application, host=host, port=a.port, timeout_graceful_shutdown=5)
+            return None
+        if a.cmd == 'restore':
+            return str(Service.restore(a.archive, a.directory))
+        if a.cmd in ('submit', 'start', 'stop', 'finalize') and not a.key:
+            p.error('offline controls require --key')
+        svc = Service(a.state, a.engine, a.image)
+        try:
+            if a.cmd == 'submit':
+                return svc.submit(a.archive, a.key)[0]
+            if a.cmd == 'start':
+                import time
+                emit(svc.launch(a.job, a.key, a.input))
+                while svc.store.get(a.job)['state'] in ('running', 'finalizing'):
+                    time.sleep(.2)
+                return svc.store.get(a.job)['state']
+            if a.cmd == 'stop':
+                return svc.stop(a.job, a.key)
+            if a.cmd == 'finalize':
+                return svc.finalize(a.job, a.key)
+            if a.cmd == 'status':
+                return svc.status(a.job)
+            if a.cmd == 'events':
+                return svc.store.events(a.job, a.after, a.limit)
+            if a.cmd == 'download':
+                data, meta = svc.download(a.job, a.name)
+                Path(a.output).write_bytes(data)
+                return meta['sha256']
+            if a.cmd == 'snapshot':
+                return str(svc.snapshot(a.job, a.output))
+        finally:
+            svc._owner.close()
+    except ModuleNotFoundError as error:
+        raise ValueError("server commands require a Unix host and pip install 'research-runner[server]'") from error
+    except StateLockedError as error:
+        raise ValueError(str(error)) from error
+
 
 def main():
- p=argparse.ArgumentParser(prog='research-runner');s=p.add_subparsers(dest='cmd',required=True)
- for cmd,args in [('assemble',['source','archive']),('verify',['archive']),('deploy',['archive','directory']),('submit',['archive']),('start',['job']),('stop',['job']),('finalize',['job']),('status',['job']),('events',['job']),('collect',['job','output']),('capabilities',[]),('schemas',[]),('download',['job','name','output']),('snapshot',['job','output']),('restore',['archive','directory'])]:
-  x=s.add_parser(cmd)
-  for arg in args:x.add_argument(arg)
-  if cmd in ('submit','start','stop','finalize'):x.add_argument('--key',required=True)
-  if cmd in ('submit','start','stop','finalize','collect'):x.add_argument('--apply',action='store_true',help='apply remote mutation; otherwise preview')
-  if cmd=='submit':x.add_argument('--receipt',help='durable receipt path (required for remote submission)')
-  if cmd in ('events',):x.add_argument('--after',type=int,default=0);x.add_argument('--limit',type=int,default=100)
-  if cmd=='collect':x.add_argument('--generation',type=int)
-  if cmd=='start':x.add_argument('--input')
- x=s.add_parser('serve');x.add_argument('--host',default='tailscale',help='bind address, or tailscale to discover this device\'s IPv4 address (default: tailscale)');x.add_argument('--port',type=int,default=8765)
- p.add_argument('--state',default=os.getenv('RESEARCH_RUNNER_STATE','./var'));p.add_argument('--engine',choices=['docker','host'],default='host',help='Codex execution location (default: host; independent of workload tool containers)');p.add_argument('--image',default='research-runner-worker:0.2.0')
- p.add_argument('--url',help='remote runner URL; token from RESEARCH_RUNNER_TOKEN')
- a=p.parse_args()
- if a.cmd=='assemble':print(assemble(a.source,a.archive));return
- if a.cmd=='verify':m,_=verify(a.archive);print(json.dumps(m,indent=2));return
- if a.cmd=='deploy':print(json.dumps(deploy(a.archive,a.directory)));return
- if a.cmd=='restore':print(Service.restore(a.archive,a.directory));return
- if a.cmd=='schemas':
-  from .protocol import schemas
-  print(json.dumps(schemas(),indent=2));return
- if a.url:
-  from .client import Client
-  from urllib.parse import quote
-  client=Client(a.url)
-  if a.cmd=='submit':
-   if not a.receipt:p.error('remote submission requires --receipt')
-   result=client.submit(a.archive,a.key,a.receipt,a.apply)
-  elif a.cmd in ('start','stop','finalize'):result=client.control(a.job,a.cmd,a.key,a.apply,{'input':a.input} if a.cmd=='start' and a.input else {})
-  elif a.cmd=='status':result=client.request('/api/jobs/'+quote(a.job,safe='')+'/status')
-  elif a.cmd=='events':result=client.request('/api/jobs/'+quote(a.job,safe='')+f'/event-log?after={a.after}&limit={a.limit}')
-  elif a.cmd=='capabilities':result=client.request('/api/capabilities')
-  elif a.cmd=='collect':result=client.collect(a.job,a.output,a.generation,a.apply)
-  else:p.error('command not supported over HTTP')
-  print(json.dumps(result,indent=2));return
- if a.cmd=='capabilities':
-  from .protocol import capabilities
-  print(json.dumps(capabilities(),indent=2));return
- if a.cmd=='serve':
-  try:host=resolve_host(a.host)
-  except ValueError as e:p.error(str(e))
-  import uvicorn
-  from .web import app
-  try:application=app(a.state,a.engine,a.image)
-  except StateLockedError as e:p.error(str(e))
-  url_host='['+host+']' if ':' in host else host
-  application.state.service.set_dashboard_url(f'http://{url_host}:{a.port}')
-  print(f'Dashboard: http://{url_host}:{a.port}',flush=True)
-  uvicorn.run(application,host=host,port=a.port,timeout_graceful_shutdown=5);return
- try:svc=Service(a.state,a.engine,a.image)
- except StateLockedError as e:p.error(str(e))
- if a.cmd=='submit':print(svc.submit(a.archive,a.key)[0])
- elif a.cmd=='start':
-  print(svc.launch(a.job,a.key,a.input),flush=True)
-  import time
-  while svc.store.get(a.job)['state'] in ('running','finalizing'):time.sleep(.2)
-  print(svc.store.get(a.job)['state'])
- elif a.cmd=='stop':print(svc.stop(a.job,a.key))
- elif a.cmd=='finalize':print(svc.finalize(a.job,a.key))
- elif a.cmd=='status':print(json.dumps(svc.status(a.job),indent=2))
- elif a.cmd=='events':print(json.dumps(svc.store.events(a.job,a.after,a.limit),indent=2))
- elif a.cmd=='collect':p.error('collection requires --url; use download for offline artifacts')
- elif a.cmd=='download':
-  data,meta=svc.download(a.job,a.name);pathlib.Path(a.output).write_bytes(data);print(meta['sha256'])
- elif a.cmd=='snapshot':print(svc.snapshot(a.job,a.output))
-if __name__=='__main__':main()
+    p = parser()
+    a = p.parse_args()
+    try:
+        value = _main(p, a)
+        if value is not None:
+            emit(value)
+    except (ValueError, OSError, KeyError) as error:
+        p.error(str(error))
+    except KeyboardInterrupt:
+        print('Interrupted; no additional job control sent.', file=sys.stderr)
+        raise SystemExit(130)
+
+
+if __name__ == '__main__':
+    main()

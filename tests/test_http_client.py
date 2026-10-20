@@ -127,3 +127,104 @@ def test_controller_shutdown_with_open_event_stream_releases_lock(tmp_path):
   if stream:stream.close()
   if proc.poll() is None:proc.kill();proc.wait(timeout=5)
   log.close()
+
+
+def test_repo_library_end_to_end_structured_results_and_dashboard_attach(tmp_path, server):
+ """A consuming repo owns all producer state and uses the ordinary remote API."""
+ from runner import ResearchRepo
+ from runner.protocol import schemas
+ control,reader=server
+ root=tmp_path/'consumer'
+ repo=ResearchRepo.init(root,control.url,'experiment')
+ repo.client.token='test-control'
+ source=root/'research/experiment'
+ manifest=json.loads((source/'manifest.json').read_text())
+ manifest['adapter']='fixture'
+ manifest['resources']['time_seconds']=20
+ manifest['policy']={'finalization_seconds':5,'termination_seconds':1,'checkpoint_seconds':.1}
+ (source/'manifest.json').write_text(json.dumps(manifest))
+ report={'format':'runner-research/v1','scope':'Deterministic lifecycle fixture',
+         'findings':[{'id':'fixture','claim':'The fixture wrote retained bytes','confidence':'supported',
+                      'evidence':['bytes'],'limitations':['No scientific claim']}],
+         'evidence':[{'id':'bytes','path':'outputs/partial.txt','description':'Retained fixture output'}],
+         'validation':[{'id':'fixture-check','method':'Fixture emission','status':'passed',
+                        'expected':'Retained fixture work','observed':'Retained fixture work','evidence':['bytes']}],
+         'reproduction':{'commands':[],'dependencies':[],'notes':'Fixture adapter only'},
+         'deliverables':['outputs/partial.txt'],'limitations':['No model or native emulator qualification']}
+ (source/'inputs/fixture.json').write_text(json.dumps({'seconds':.1,'research':report}))
+ # Payloads contain the schema even without a checkout on the worker/producer.
+ assert json.loads((source/'inputs/contracts.json').read_text())['research']==schemas()['research']
+ preview=repo.submit('experiment')
+ assert preview['preview']
+ receipt=repo.submit('experiment',apply=True)
+ assert repo.submit('experiment',apply=True)['id']==receipt['id']
+ assert repo.status('experiment')['state']=='queued'
+ launch=repo.start('experiment',apply=True)
+ assert repo.start('experiment',apply=True)==launch
+ # Monitoring and collection work with a read-only credential.
+ repo.client.token='test-read'
+ observations=list(repo.monitor('experiment',interval=.1,timeout=10))
+ assert observations[-1]['status']['state']=='finished'
+ assert repo.status('experiment')['outcome']=='complete'
+ collected=repo.pull('experiment',apply=True)
+ assert collected['verified']
+ inspected=repo.results('experiment')
+ assert inspected['research']['validation'][0]['status']=='passed'
+ assert inspected['delivery_verified'] and inspected['independent_validation']=='not_run'
+ # Dashboard-submitted jobs can be adopted without a second submission/start.
+ adopter=ResearchRepo.init(tmp_path/'another-consumer',control.url,'another')
+ adopter.client.token='test-read'
+ adopter.attach('from-dashboard',receipt['id'])
+ assert adopter.pull('from-dashboard',apply=True)['generation']==collected['generation']
+
+
+def test_invalid_structured_report_is_not_a_successful_closeout(tmp_path, server):
+ from runner import ResearchRepo
+ control,_=server
+ repo=ResearchRepo.init(tmp_path/'consumer',control.url)
+ repo.client.token='test-control'
+ source=repo.root/'research/example'
+ manifest=json.loads((source/'manifest.json').read_text());manifest['adapter']='fixture'
+ (source/'manifest.json').write_text(json.dumps(manifest))
+ # A syntactically present report cannot bypass the structured contract.
+ (source/'inputs/fixture.json').write_text(json.dumps({'seconds':.1,'research':{'format':'runner-research/v1'}}))
+ repo.submit('example',apply=True);repo.start('example',apply=True)
+ observations=list(repo.monitor('example',interval=.1,timeout=10))
+ assert observations[-1]['status']['state']=='failed'
+ assert repo.status('example')['outcome'] is None
+ # Failed runs still retain partial diagnostics for inspection.
+ assert repo.pull('example',apply=True)['verified']
+
+
+@pytest.mark.skipif(not os.getenv('RR_INSTALLED_CLIENT'),reason='optional built-wheel CLI qualification')
+def test_installed_cli_lifecycle_outside_runner_checkout(tmp_path, server):
+ control,_=server
+ executable=os.environ['RR_INSTALLED_CLIENT']
+ root=tmp_path/'external-consumer';root.mkdir()
+ env=os.environ.copy();env.pop('PYTHONPATH',None);env['RESEARCH_RUNNER_TOKEN']='test-control'
+ def command(*args):
+  result=subprocess.run([executable,*args],cwd=root,env=env,capture_output=True,text=True,timeout=20)
+  assert result.returncode==0,(args,result.stdout,result.stderr)
+  return result
+ command('init','--url',control.url,'--name','experiment')
+ source=root/'research/experiment'
+ manifest=json.loads((source/'manifest.json').read_text());manifest['adapter']='fixture'
+ (source/'manifest.json').write_text(json.dumps(manifest))
+ report={'format':'runner-research/v1','scope':'Installed CLI qualification','findings':[],
+         'evidence':[{'id':'fixture','path':'outputs/partial.txt','description':'Fixture bytes'}],
+         'validation':[{'id':'check','method':'Fixture emission','status':'passed',
+                        'expected':'Retained fixture work','observed':'Retained fixture work','evidence':['fixture']}],
+         'reproduction':{'commands':[],'dependencies':[],'notes':'Deterministic fixture'},
+         'deliverables':['outputs/partial.txt'],'limitations':['Not a live-model test']}
+ (source/'inputs/fixture.json').write_text(json.dumps({'research':report}))
+ assert json.loads(command('submit','experiment').stdout)['preview']
+ receipt=json.loads(command('submit','experiment','--apply').stdout)
+ command('start','experiment','--apply')
+ updates=[json.loads(line) for line in command('monitor','experiment','--json','--interval','0.1','--timeout','10').stdout.splitlines()]
+ assert updates[-1]['status']['state']=='finished'
+ assert json.loads(command('status','experiment').stdout)['outcome']=='complete'
+ assert json.loads(command('pull','experiment','--apply').stdout)['verified']
+ assert json.loads(command('results','experiment').stdout)['research']['scope']=='Installed CLI qualification'
+ command('attach','dashboard-alias',receipt['id'])
+ command('pull','dashboard-alias','--apply')
+ assert len(control.request('/api/jobs'))==1

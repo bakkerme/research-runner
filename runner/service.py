@@ -14,7 +14,7 @@ import uuid
 
 from .files import read_file
 from .package import MAX_FILE, MAX_FILES, MAX_TOTAL, declared, deploy, digest, relpath, read_manifest, hash_file, MAX_ARCHIVE
-from .protocol import Checkpoint, Result, is_mvp, load_contract
+from .protocol import Checkpoint, Result, is_mvp, load_contract, validate_research
 from .store import ACTIVE, Store
 
 
@@ -321,6 +321,8 @@ class Service:
    if j['finalize_reason'] and result['reason'] not in (j['finalize_reason'],'no_actionable_work'):
     raise ValueError('result must respect requested finalization reason')
   metadata=[{'name':n,'sha256':digest(b),'size':len(b)} for n,b in validated]
+  if mvp and final and 'outputs/research.json' in names:
+   validate_research(dict(validated)['outputs/research.json'],{f['name']:f for f in metadata})
   for meta,(_,data) in zip(metadata,validated):
    dst=pub/meta['sha256']
    if dst.exists():

@@ -4,6 +4,8 @@
 /wheelhouse/
 /.docker/
 /.git/
+/build/
+/dist/
 /.env
 /.env.*
 /research_runner.egg-info/

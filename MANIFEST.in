@@ -1,0 +1,8 @@
+include build_support.py README.md AGENTS.md Dockerfile
+recursive-include docs *.md
+recursive-include schemas *.json
+recursive-include runner/skills *.md
+recursive-include tools *.py
+recursive-include sample *.md *.json *.txt
+recursive-include sample-mvp *.md *.json *.txt
+recursive-include sample-codex *.md *.json *.txt

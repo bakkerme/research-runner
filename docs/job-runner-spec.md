@@ -169,7 +169,7 @@ should be replayed until the checkpoint and actual outputs have been reconciled.
 | `POST /api/jobs/{id}/finalize`, `/stop` | Cooperative wrap-up or immediate stop; idempotent. |
 | `POST /api/jobs/{id}/input`, `/approve` | Existing steering/decision controls. |
 | `GET /api/jobs/{id}/status` | State, outcome, remaining time, deadlines, pending decisions and current publication. |
-| `GET /api/jobs/{id}/event-log?after=SEQ&limit=N` | Ordered replay; events, next_cursor, has_more. Limit 1..1000. `tail=true` selects recent events; `before=SEQ` pages backward with previous_cursor and has_previous. |
+| `GET /api/jobs/{id}/event-log?after=SEQ&limit=N` | Ordered replay; events, next_cursor, has_more. Limit 1..1000. `tail=true` selects recent events; `before=SEQ` pages backward with previous_cursor and has_previous. `activity=true` excludes per-file artifact events before pagination; raw replay remains the default. |
 | `GET /api/jobs/{id}/events` | SSE; `after` and Last-Event-ID reconnect. |
 | `GET /api/jobs/{id}/checkpoint` | Current published checkpoint and generation. |
 | `GET /api/jobs/{id}/artifact-manifest?generation=N` | Select immutable publication; defaults to latest. |
@@ -232,3 +232,24 @@ The Codex adapter uses the SDK's streaming/steering interface; see the
 [official app-server documentation](https://learn.chatgpt.com/docs/app-server).
 Use `tools/qualify_host.py` to verify native recovery and finalization on the
 execution host with its configured Codex executable and account.
+
+## Repo producer and structured research extension (0.3)
+
+The installed producer library/CLI, scaffolding, durable local handles and
+recoverable collection behavior are documented in [client-workflow.md](client-workflow.md).
+They use the existing v2 package and HTTP operations; no new submission endpoint
+or server-side automatic continuation is introduced. Server dependencies are
+installed with the `server` extra.
+
+`outputs/research.json`, when present at normal v2 closeout, must satisfy
+[`runner-research/v1`](../schemas/research.json). Its claims reference unique
+evidence IDs; checks preserve methods, expected/observed results and explicit
+passed/failed/inconclusive/not_run statuses. Evidence/deliverable paths must be
+published output files; supplied evidence hashes must match. The server validates
+structure and artifact linkage, while the workload performs scientific validation.
+New scaffolds require this report. Existing v2 packages without it remain valid.
+Partial publications remain available even if a report is unfinished or invalid.
+
+`features.structured_research` advertises this extension. Existing status
+`validation: not_run` continues to describe independent Runner validation, not
+whether the researcher performed checks recorded in the research report.

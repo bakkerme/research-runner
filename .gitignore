@@ -13,3 +13,5 @@ research_runner.egg-info/
 /receipt*.json
 /collected*/
 /runs/
+/build/
+/dist/

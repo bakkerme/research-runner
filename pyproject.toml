@@ -4,11 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "research-runner"
-version = "0.2.2"
+version = "0.3.0"
+readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["fastapi==0.116.1", "uvicorn==0.35.0", "openai-codex==0.159.0", "pydantic==2.14.1"]
+dependencies = ["pydantic==2.14.1"]
 
 [project.optional-dependencies]
+server = ["fastapi==0.116.1", "uvicorn==0.35.0", "openai-codex==0.159.0"]
 test = ["pytest>=8", "httpx==0.28.1"]
 browser = ["playwright>=1.50"]
 
@@ -17,3 +19,9 @@ research-runner = "runner.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["runner*"]
+
+[tool.setuptools.package-data]
+runner = ["skills/research-runner/SKILL.md"]
+
+[tool.setuptools.cmdclass]
+build_py = "build_support.BuildPy"

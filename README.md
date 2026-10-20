@@ -1,4 +1,4 @@
-# Research Runner 0.2.2 MVP
+# Research Runner 0.3.0
 
 A single-host runner for bounded agent jobs. **Codex runs on the host by default**,
 using the operator's normal login and session store. A payload supplies its brief,
@@ -11,13 +11,43 @@ checkpoints, deadline wrap-up, complete/partial/blocked outcomes and hash-verifi
 collection. The [package and API contract](docs/job-runner-spec.md) defines the
 interface for workload producers and monitoring clients.
 
+## Use from another repo
+
+Start with the [agent integration quickstart](docs/agent-quickstart.md). A project
+agent can install a pinned wheel from [GitHub Releases](https://github.com/bakkerme/research-runner/releases)
+or download a tested CI artifact, then work entirely in its own repo. No Runner
+clone, local service or server dependencies are needed. The wheel includes the
+CLI, library, maintained docs, schemas and bundled agent skill.
+
+The simplest project dependency is a versioned release wheel URL in
+`requirements-research.txt`; see the quickstart for the exact URL and the
+unreleased-CI download alternative. After installation:
+
+```sh
+research-runner docs
+research-runner init --url http://RUNNER:8765 --name experiment
+# Edit research/experiment/inputs/question.md and supply required inputs.
+research-runner package experiment
+research-runner submit experiment --apply
+research-runner start experiment --apply
+research-runner monitor experiment --timeout 60
+research-runner pull experiment --apply
+research-runner results experiment
+```
+
+The library owns repo-local job identities, receipts, event cursors and recoverable
+hash-verified collections. New research definitions return structured claims,
+evidence, validation checks, reproduction steps and limitations. See the
+[producer workflow and library API](docs/client-workflow.md) for installation,
+named experiments, dashboard adoption, recovery and result contracts.
+
 ## Install and serve
 
 Use Python 3.11+ (3.12 recommended) and an installed, authenticated Codex CLI.
 
 ```sh
 python3.12 -m venv .venv
-.venv/bin/pip install -e '.[test]'
+.venv/bin/pip install -e '.[server,test]'
 codex login status
 .venv/bin/research-runner --state ./var serve
 ```
@@ -114,9 +144,18 @@ updates; operation-scoped keys prevent duplicate actions. Pending approvals expi
 on restart/finalization. Uncertain steering is not replayed. A started job cannot
 silently switch between native and containerized execution.
 
-The dashboard loads the current result and artifact generation directly. Its log
-shows at most 100 events with shortened entries; Older events and Latest events
-page through history. Full event bodies remain available through the HTTP API.
+The dashboard uses a compact, full-window workspace with Activity, Files, Findings,
+and Summary tabs. Session sign-in, package submission, and job Actions open on demand;
+the jobs sidebar can be hidden. Activity lists up to 100 events per page, with a
+separate reader for full messages and command output. Long commands and raw event
+payloads expand on demand. Consecutive streaming chunks share one row. Search and
+type filters apply to the current page; Older events and Latest events navigate
+history. Per-file publication records are excluded before activity pagination so
+large generations do not bury messages and tools; raw history remains available
+through the API (omit `activity=true`). The Files tab searches published paths,
+previews text files up to 1 MB, and retains per-file downloads. Enable Follow live
+to follow new activity; scrolling back pauses it. Appearance supports light, dark,
+or your system theme and remembers your choice in this browser.
 
 The state lock records the owning PID and dashboard URL. A lock error means a
 controller still owns that directory, even if a separate foreground invocation
@@ -169,3 +208,18 @@ containerized agents. Do not infer support for nested workload containers.
 
 Do not commit private state, credentials, generated packages, test outputs or
 workload assets.
+
+## Distribution and releases
+
+The Tests workflow builds an sdist, builds the wheel from that sdist, and uploads
+`research-runner-COMMIT_SHA` containing the wheel, source archive, separate docs ZIP
+and `SHA256SUMS`. Linux, macOS and Windows test that same installed wheel outside
+the checkout. The Linux suite also runs the complete installed CLI against a
+disposable HTTP service. Only a successful workflow should be consumed.
+
+Pushing a `vVERSION` tag matching `pyproject.toml` publishes the exact tested assets
+as a GitHub release after all checks pass. This does not publish to PyPI. Local
+maintainers can reproduce the bundle with `python -m build` followed by
+`python tools/package_distribution.py --dist dist` in a clean output directory.
+The wheel provides `research-runner docs` and `docs --output DIRECTORY`, so its
+consumer documentation remains available without visiting or cloning this repo.
