@@ -60,10 +60,10 @@ def app(root,engine='host',image='research-runner-worker:0.2.0'):
   try:return svc.status(jid)
   except KeyError:raise HTTPException(404,'job not found')
  @a.get('/api/jobs/{jid}/event-log')
- def event_log(jid,after:int=Query(0,ge=0),limit:int=Query(100,ge=1,le=1000),before:int|None=Query(None,ge=1),tail:bool=False):
+ def event_log(jid,after:int=Query(0,ge=0),limit:int=Query(100,ge=1,le=1000),before:int|None=Query(None,ge=1),tail:bool=False,activity:bool=False):
   if not svc.store.get(jid):raise HTTPException(404,'job not found')
   backward=tail or before is not None
-  items=svc.store.events(jid,after,limit+1,before=before,newest_first=backward);page=[];size=0
+  items=svc.store.events(jid,after,limit+1,before=before,newest_first=backward,activity=activity);page=[];size=0
   for item in items[:limit]:
    item_size=len(json.dumps(item))
    if page and size+item_size>2*1024*1024:break

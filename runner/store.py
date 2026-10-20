@@ -110,9 +110,10 @@ class Store:
    j=c.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone();return dict(j) if j else None
  def list(self):
   with self.db() as c:return [dict(x) for x in c.execute('SELECT * FROM jobs ORDER BY created DESC')]
- def events(self,jid=None,after=0,limit=None,before=None,newest_first=False):
+ def events(self,jid=None,after=0,limit=None,before=None,newest_first=False,activity=False):
   with self.db() as c:
    sql='SELECT * FROM events WHERE seq>?'+(' AND job_id=?' if jid else '');args=(after,jid) if jid else (after,)
+   if activity:sql+=" AND kind!='artifact'"
    if before is not None:sql+=' AND seq<?';args+=(before,)
    sql+=' ORDER BY seq'+(' DESC' if newest_first else '')
    if limit is not None:sql+=' LIMIT ?';args+= (limit,)

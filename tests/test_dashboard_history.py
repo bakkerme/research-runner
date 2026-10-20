@@ -56,3 +56,22 @@ def test_pending_approval_survives_history_window(tmp_path):
  with store.db() as c:
   for i in range(200):store.event(c,jid,attempt,'progress',{'n':i})
  assert service.status(jid)['pending_approvals']==[request]
+
+
+def test_activity_pages_skip_file_publication_flood_without_changing_raw_history(tmp_path):
+ application=app(tmp_path/'state');store=application.state.service.store
+ jid,_=store.submit('c'*32,'large review','fixture','s','0'*64)
+ with store.db() as c:
+  store.event(c,jid,1,'progress',{'message':'Useful command result'})
+  for i in range(387):store.event(c,jid,1,'artifact',{'name':f'outputs/evidence/{i}.json'})
+  store.event(c,jid,1,'finished',{'result':{'summary':'Review complete'}})
+ expected=[e for e in store.events(jid) if e['kind']!='artifact']
+ with TestClient(application) as client:
+  raw=client.get(f'/api/jobs/{jid}/event-log?tail=true&limit=100').json()
+  assert sum(e['kind']=='artifact' for e in raw['events'])==99
+  page=client.get(f'/api/jobs/{jid}/event-log?tail=true&limit=2&activity=true').json()
+  assert page['events']==expected[-2:] and page['has_previous']
+  older=client.get(f'/api/jobs/{jid}/event-log?before={page["previous_cursor"]}&limit=2&activity=true').json()
+  assert older['events']+page['events']==expected
+  assert not older['has_previous']
+  assert len(store.events(jid))==390
