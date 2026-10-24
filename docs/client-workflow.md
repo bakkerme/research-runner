@@ -14,7 +14,7 @@ wheel can also be installed directly:
 ```sh
 python -m pip install /path/to/research_runner-0.3.0-py3-none-any.whl
 research-runner docs
-research-runner init --url http://RUNNER:8765 --name pacman
+research-runner init --url http://RUNNER:8765 --name experiment
 ```
 
 The wheel includes the full maintained docs, schemas and skill. `init` exports
@@ -27,11 +27,11 @@ Initialization creates:
 
 ```text
 research-runner.toml                      # URL and configuration version
-research/pacman/manifest.json             # scope name, runtime, resources, outputs
-research/pacman/brief.md
-research/pacman/AGENTS.md                 # remote research instructions
-research/pacman/inputs/question.md        # question and acceptance criteria
-research/pacman/inputs/contracts.json     # exact bundled result schemas
+research/experiment/manifest.json             # scope name, runtime, resources, outputs
+research/experiment/brief.md
+research/experiment/AGENTS.md                 # remote research instructions
+research/experiment/inputs/question.md        # question and acceptance criteria
+research/experiment/inputs/contracts.json     # exact bundled result schemas
 .agents/skills/research-runner/SKILL.md    # agent workflow skill
 .gitignore                               # adds /.research-runner/
 ```
@@ -58,21 +58,21 @@ assembler/verifier still apply. Missing or oversized dependencies must be report
 rather than silently omitted.
 
 ```sh
-research-runner package pacman
+research-runner package experiment
 # package prints its archive path and SHA-256; verify PATH prints the inventory
-research-runner submit pacman                 # preview; local packaging only
-research-runner submit pacman --apply         # upload; does not start execution
-research-runner start pacman --apply
-research-runner status pacman
-research-runner events pacman --after 0 --limit 100
-research-runner monitor pacman --timeout 60
-research-runner monitor pacman --json         # NDJSON for integrations
-research-runner pull pacman                   # preview selected generation
-research-runner pull pacman --apply
-research-runner results pacman
+research-runner submit experiment                 # preview; local packaging only
+research-runner submit experiment --apply         # upload; does not start execution
+research-runner start experiment --apply
+research-runner status experiment
+research-runner events experiment --after 0 --limit 100
+research-runner monitor experiment --timeout 60
+research-runner monitor experiment --json         # NDJSON for integrations
+research-runner pull experiment                   # preview selected generation
+research-runner pull experiment --apply
+research-runner results experiment
 ```
 
-Run names default to definition names. Use `submit pacman --run pacman-second
+Run names default to definition names. Use `submit experiment --run experiment-second
 --apply` for a separate experiment, then address that run name for start/status/
 monitor/pull. A run pins its server, package hash and durable submission/control
 identities before sending requests. Repeat the same submit/start command after
@@ -90,9 +90,9 @@ steers, resumes or starts work. The server currently permits one running job.
 A dashboard submission can join the same workflow:
 
 ```sh
-research-runner attach pacman-dashboard REMOTE_JOB_ID
-research-runner status pacman-dashboard
-research-runner pull pacman-dashboard --apply
+research-runner attach experiment-dashboard REMOTE_JOB_ID
+research-runner status experiment-dashboard
+research-runner pull experiment-dashboard --apply
 ```
 
 The existing low-level commands remain available with explicit `--url`, archive
@@ -163,13 +163,13 @@ review/local acceptance can be implemented by the consuming repo where appropria
 from runner import ResearchRepo
 
 repo = ResearchRepo("/path/to/consumer")
-package = repo.package("pacman")
-receipt = repo.submit("pacman", run="pacman-second", apply=True)
-repo.start("pacman-second", apply=True)
-for update in repo.monitor("pacman-second", timeout=60):
+package = repo.package("experiment")
+receipt = repo.submit("experiment", run="experiment-second", apply=True)
+repo.start("experiment-second", apply=True)
+for update in repo.monitor("experiment-second", timeout=60):
     print(update)
-collection = repo.pull("pacman-second", apply=True, progress=print)
-results = repo.results("pacman-second")
+collection = repo.pull("experiment-second", apply=True, progress=print)
+results = repo.results("experiment-second")
 ```
 
 `ResearchRepo.init(path, url, name)` provides the same scaffolding. `Client(url,

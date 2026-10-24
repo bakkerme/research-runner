@@ -17,6 +17,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install build
+      - name: Check committed source for machine-specific configuration
+        run: python tools/check_portability.py --revision HEAD
       - name: Check version tag
         if: startsWith(github.ref, 'refs/tags/')
         env:

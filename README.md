@@ -43,14 +43,35 @@ named experiments, dashboard adoption, recovery and result contracts.
 
 ## Install and serve
 
-Use Python 3.11+ (3.12 recommended) and an installed, authenticated Codex CLI.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and an
+authenticated Codex CLI under the account that will run the service. Use Python
+3.11+ (3.12 recommended); uv can provision the requested Python version.
+Install a pinned, tested release wheel with the `server` extra (no source checkout
+or test dependencies needed):
 
 ```sh
-python3.12 -m venv .venv
-.venv/bin/pip install -e '.[server,test]'
+uv tool install --python 3.12 \
+  'research-runner[server] @ https://github.com/bakkerme/research-runner/releases/download/v0.3.0/research_runner-0.3.0-py3-none-any.whl'
+uv tool update-shell
+# Open a new shell if uv added its executable directory to PATH.
 codex login status
-.venv/bin/research-runner --state ./var serve
+research-runner --state "$HOME/.local/share/research-runner" serve --host 127.0.0.1
 ```
+
+[uv tool install](https://docs.astral.sh/uv/guides/tools/) manages a persistent
+isolated environment and exposes the executable on PATH; activation is unnecessary.
+Runner is distributed through GitHub releases, not PyPI. For an unreleased change,
+use a successful CI artifact as described in the [quickstart](docs/agent-quickstart.md),
+verify its `SHA256SUMS`, and install the downloaded wheel instead:
+
+```sh
+uv tool install --python 3.12 '/absolute/path/research_runner-0.3.0-py3-none-any.whl[server]'
+```
+
+Keep state outside the installation so reinstalling Runner preserves jobs.
+For an existing deployment, pass its original absolute `--state` directory;
+changing it selects a separate job store. To run continuously on a Linux host, follow
+the [user systemd service setup](docs/linux-service.md).
 
 The SDK is pinned to 0.159.0. The native adapter uses Codex found on PATH, or
 `RESEARCH_RUNNER_CODEX_BIN` when explicitly configured by the operator. If neither
@@ -58,8 +79,12 @@ is available, it falls back to the SDK's bundled executable. Native authenticati
 config and sessions use the normal CODEX_HOME (default ~/.codex); no credentials
 are copied or mounted. Keep the same user/home/runtime when resuming a job.
 
-The service discovers its Tailscale IPv4 address and prints the dashboard URL.
-For localhost use `serve --host 127.0.0.1`. Discovery failure stops startup.
+The service binds to `127.0.0.1` by default and prints the dashboard URL.
+The explicit bind in the command above also works with older release wheels
+that defaulted to Tailscale discovery.
+For remote access, configure `serve --host SERVER_BIND_ADDRESS` with an address
+assigned to the host. Tailscale is optional: `serve --host tailscale` discovers
+its IPv4 address; discovery failure stops startup.
 Set distinct `RESEARCH_RUNNER_READ_TOKEN` and `RESEARCH_RUNNER_CONTROL_TOKEN`
 server variables for independent monitors. Set both or neither; without tokens
 all callers on the trusted network have controls. Do not expose it publicly.
@@ -77,16 +102,16 @@ declared. Keep archives outside the source folder and credentials out of payload
 Plans, provenance, previous results and workload tools are ordinary inputs.
 
 ```sh
-.venv/bin/research-runner assemble SOURCE job.rrpkg
-.venv/bin/research-runner verify job.rrpkg
-.venv/bin/research-runner --url http://RUNNER:8765 capabilities
-.venv/bin/research-runner --url http://RUNNER:8765 submit job.rrpkg --key submit-001 --receipt receipt.json
-.venv/bin/research-runner --url http://RUNNER:8765 submit job.rrpkg --key submit-001 --receipt receipt.json --apply
-.venv/bin/research-runner --url http://RUNNER:8765 start JOB_ID --key start-001 --apply
-.venv/bin/research-runner --url http://RUNNER:8765 status JOB_ID
-.venv/bin/research-runner --url http://RUNNER:8765 events JOB_ID --after 0 --limit 100
-.venv/bin/research-runner --url http://RUNNER:8765 collect JOB_ID NEW_DIRECTORY
-.venv/bin/research-runner --url http://RUNNER:8765 collect JOB_ID NEW_DIRECTORY --apply
+research-runner assemble SOURCE job.rrpkg
+research-runner verify job.rrpkg
+research-runner --url http://RUNNER:8765 capabilities
+research-runner --url http://RUNNER:8765 submit job.rrpkg --key submit-001 --receipt receipt.json
+research-runner --url http://RUNNER:8765 submit job.rrpkg --key submit-001 --receipt receipt.json --apply
+research-runner --url http://RUNNER:8765 start JOB_ID --key start-001 --apply
+research-runner --url http://RUNNER:8765 status JOB_ID
+research-runner --url http://RUNNER:8765 events JOB_ID --after 0 --limit 100
+research-runner --url http://RUNNER:8765 collect JOB_ID NEW_DIRECTORY
+research-runner --url http://RUNNER:8765 collect JOB_ID NEW_DIRECTORY --apply
 ```
 
 Remote mutations preview without `--apply`; collection pins a generation and
@@ -180,11 +205,27 @@ Do not export the host's whole Codex home or credentials to make a snapshot port
 
 ## Tests and host verification
 
+For development, run these commands from the source checkout. This environment
+is separate from the wheel installed with `uv tool install`:
+
 ```sh
+uv venv --python 3.12
+uv pip install --python .venv/bin/python -e '.[server,test]'
 .venv/bin/pytest -q
 .venv/bin/python tools/qualify_host.py --codex-bin /path/to/codex --output runs/NEW_QUALIFICATION
 .venv/bin/python tools/qualify_host.py --codex-bin /path/to/codex --output runs/NEW_QUALIFICATION --apply
 ```
+
+Enable the [Git pre-push portability check](docs/portability.md) in each checkout:
+
+```sh
+git config --local core.hooksPath .githooks
+python3 tools/check_portability.py
+```
+
+Preserve any existing hooks before changing `core.hooksPath`. The check flags
+personal paths, network addresses, private hostnames and accidentally tracked
+state in outgoing commits. CI also checks the committed source tree.
 
 The probe defaults to native execution, needs no Docker, owns a fresh private state
 and tests deadlines, blocked finish, real model session recall after controller death,

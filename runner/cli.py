@@ -82,7 +82,7 @@ def parser():
             item.add_argument('--timeout', type=float, help='maximum monitoring seconds; Ctrl-C exits without controlling the job')
     serve = sub.add_parser('serve')
     serve.add_argument('--loader-config', help='operator-owned asset loader TOML file')
-    serve.add_argument('--host', default='tailscale')
+    serve.add_argument('--host', default='127.0.0.1', help='bind address (default: localhost); use tailscale for optional IPv4 discovery')
     serve.add_argument('--port', type=int, default=8765)
     return p
 
@@ -261,7 +261,7 @@ def _main(p, a):
         finally:
             svc._owner.close()
     except ModuleNotFoundError as error:
-        raise ValueError("server commands require a Unix host and pip install 'research-runner[server]'") from error
+        raise ValueError('server commands require a Unix host and a Research Runner distribution installed with the server extra') from error
     except StateLockedError as error:
         raise ValueError(str(error)) from error
 

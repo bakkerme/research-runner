@@ -22,6 +22,23 @@ Server tests use `python -m pip install -e '.[server,test]'` and `pytest -q`.
 Preserve existing working changes, private state, generated packages and receipts;
 never commit workload inputs, credentials or generated research outputs.
 
+## Portability and pushes
+
+Keep the shared project independent of any operator's account, workstation,
+private network or workload. Use configurable addresses, home-relative paths,
+and generic examples. Canonical project release URLs are public distribution
+coordinates and should remain real. Tailscale is an optional bind mode;
+the default server binds to localhost.
+
+Install the repository's Git pre-push hook with
+`git config --local core.hooksPath .githooks` (preserve any existing hook setup).
+Before pushing, run `python3 tools/check_portability.py` and review the changes
+for local paths, addresses, private hostnames, credentials and assumptions about
+installed tools or hardware. The hook also scans outgoing committed trees,
+including intermediate commits. Do not bypass a failure or add broad exclusions.
+See [the portability guide](docs/portability.md) for local private markers,
+installation and the check's limits.
+
 ## External asset dependencies and independent loaders
 
 Payloads may declare v2 `dependencies` using `asset_type`, `asset_id` and
