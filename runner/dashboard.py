@@ -287,6 +287,10 @@ function readable(e){
  if(item.type==='agentMessage')label='Message '+(d.method==='item/completed'?'finished':'started');
  const category=/error|failed|interrupt|approval/i.test(method+' '+(item.status||''))||p.error?'issue':/command|tool|fileChange|file_change|exec|diff/i.test(method+' '+(item.type||''))?'tool':/message|progress|finding|reasoning/i.test(method+' '+(item.type||''))?'message':'other';
  const parts=[d.message,d.text,d.claim,d.error,d.reason,p.delta,p.text,p.message,item.text,item.command,item.aggregated_output,item.aggregatedOutput,p.output,p.diff,d.result?.summary,d.checkpoint?.summary,...(p.turn?.items||[]).map(v=>v.text),p.error?.message,p.turn?.error?.message,d.input,d.name,...(item.summary||[]),...(item.content||[]).map(v=>typeof v==='string'?v:v.text),...(item.changes||[]).map(v=>v.path)].filter(v=>typeof v==='string'&&v.length);
+ if(e.kind==='asset_progress'){
+  const count=Number.isFinite(d.bytes_completed)?' · '+d.bytes_completed.toLocaleString()+(Number.isFinite(d.bytes_total)?' / '+d.bytes_total.toLocaleString():'')+' bytes':'';
+  return {label:'Asset preparation',category:'message',body:(d.asset_type||'')+' · '+(d.asset_id||'')+' → '+(d.destination||'')+'\n'+(d.message||'Preparing')+count};
+ }
  const body=[...new Set(parts)].join('\n\n')||Object.entries(d).filter(([k,v])=>typeof v==='string'&&!['method','id','turn_id'].includes(k)).map(([k,v])=>k.replace(/_/g,' ')+': '+v).join(' · ')||'Event recorded. Open details to inspect the payload.';
  return {label,category,body,command:item.command,output:item.aggregated_output??item.aggregatedOutput};
 }

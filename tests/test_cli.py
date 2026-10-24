@@ -18,7 +18,7 @@ def test_serve_defaults_to_detected_tailscale_address(monkeypatch,capsys):
  monkeypatch.setattr(cli.sys,'argv',['research-runner','--state','./var','serve'])
  cli.main()
  probe.assert_called_once_with(['tailscale','ip','-4'],capture_output=True,text=True,check=True,timeout=5)
- factory.assert_called_once_with('./var','host','research-runner-worker:0.2.0')
+ factory.assert_called_once_with('./var','host','research-runner-worker:0.2.0',loaders={})
  run.assert_called_once_with(application,host='100.101.102.103',port=8765,timeout_graceful_shutdown=5)
  assert 'http://100.101.102.103:8765' in capsys.readouterr().out
 

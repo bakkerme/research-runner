@@ -354,3 +354,33 @@ def test_documentation_and_schemas_available_without_checkout(tmp_path):
     repo = ResearchRepo.init(tmp_path / 'consumer', 'http://runner.invalid')
     assert (repo.state / 'docs/schemas/research.json').is_file()
     assert (repo.root / '.agents/skills/research-runner/SKILL.md').is_file()
+
+
+def test_asset_authoring_materials_and_optional_manifest_ship_with_client(tmp_path):
+    from runner.documentation import documents, export_documents
+    content = documents()
+    assert {'docs/asset-loaders.md', 'schemas/asset-loader.json',
+            'examples/asset-loader/loader.py', 'examples/asset-loader/loaders.example.toml'} <= content.keys()
+    assert json.loads(content['schemas/asset-loader.json']) == schemas()['asset-loader']
+    assert 'dependencies' not in schemas()['manifest-v2']['required']
+    assert 'from runner' not in content['examples/asset-loader/loader.py']
+    export_documents(tmp_path / 'docs')
+    process = subprocess.run([sys.executable, str(tmp_path / 'docs/examples/asset-loader/loader.py'),
+        '--catalog', str(tmp_path / 'not-needed-for-describe.json')],
+        input=json.dumps({'protocol': 'runner-asset-loader/v1', 'operation': 'describe', 'asset_type': 'local-files'}) + '\n',
+        capture_output=True, text=True, cwd=tmp_path)
+    assert process.returncode == 0, process.stderr
+    assert json.loads(process.stdout)['operations'] == ['resolve', 'materialize']
+
+
+def test_client_rejects_asset_submission_to_old_server(tmp_path):
+    repo = ResearchRepo.init(tmp_path, 'http://runner.invalid')
+    path = tmp_path / 'research/example/manifest.json'
+    value = json.loads(path.read_text())
+    value['dependencies'] = [{'asset_type': 'private-data', 'asset_id': 'revision-1', 'destination': 'inputs/external'}]
+    path.write_text(json.dumps(value))
+    package = repo.package('example')
+    client = Client('http://runner.invalid')
+    client.request = lambda *args: {'package_formats': ['research-package/v2'], 'features': {}}
+    with pytest.raises(ValueError, match='asset dependencies'):
+        client.submit(package['archive'], 'key', tmp_path / 'receipt.json', apply=True)

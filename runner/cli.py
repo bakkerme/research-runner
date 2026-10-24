@@ -32,6 +32,8 @@ def parser():
     p.add_argument('--image', default='research-runner-worker:0.2.0')
     p.add_argument('--url', help='explicit remote URL for low-level commands; token from RESEARCH_RUNNER_TOKEN')
     sub = p.add_subparsers(dest='cmd', required=True)
+    loaders = sub.add_parser('validate-loaders', help='validate operator registrations and handshake with installed loaders')
+    loaders.add_argument('--config', required=True, help='server asset loader TOML file')
     docs = sub.add_parser('docs', help='read the bundled agent quickstart or export docs, schemas and skill')
     docs.add_argument('--output', help='export directory; preserves modified existing files')
     init = sub.add_parser('init', help='scaffold a consuming repo and bundled agent skill')
@@ -79,6 +81,7 @@ def parser():
             item.add_argument('--interval', type=float, default=2)
             item.add_argument('--timeout', type=float, help='maximum monitoring seconds; Ctrl-C exits without controlling the job')
     serve = sub.add_parser('serve')
+    serve.add_argument('--loader-config', help='operator-owned asset loader TOML file')
     serve.add_argument('--host', default='tailscale')
     serve.add_argument('--port', type=int, default=8765)
     return p
@@ -111,10 +114,17 @@ def monitor_message(message, as_json):
             return
         data = event.get('data', {})
         detail = data.get('message') or data.get('method') or ''
+        if event.get('kind') == 'asset_progress':
+            detail = data.get('asset_id', '') + ': ' + detail
+            if 'bytes_completed' in data:
+                detail += f" ({data['bytes_completed']:,}" + (f" / {data['bytes_total']:,}" if 'bytes_total' in data else '') + ' bytes)'
         print(f"[{event['seq']}] {event.get('kind', 'event')}: {str(detail)[:240]}", flush=True)
 
 
 def _main(p, a):
+    if a.cmd == 'validate-loaders':
+        from .assets import read_config, validate_loaders
+        return validate_loaders(read_config(a.config))
     if a.cmd == 'docs':
         from .documentation import documents, export_documents
         if a.output:
@@ -213,7 +223,8 @@ def _main(p, a):
             host = resolve_host(a.host)
             import uvicorn
             from .web import app
-            application = app(a.state, a.engine, a.image)
+            from .assets import read_config
+            application = app(a.state, a.engine, a.image, loaders=read_config(a.loader_config))
             url_host = '[' + host + ']' if ':' in host else host
             application.state.service.set_dashboard_url(f'http://{url_host}:{a.port}')
             print(f'Dashboard: http://{url_host}:{a.port}', flush=True)

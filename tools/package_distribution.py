@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import tarfile
 import zipfile
 
 
@@ -24,10 +25,18 @@ def package_distribution(directory):
         docs = {name.removeprefix('runner/_bundle/'): archive.read(name)
                 for name in names if name.startswith('runner/_bundle/') and not name.endswith('/')}
         required = {'README.md', 'AGENTS.md', 'docs/agent-quickstart.md', 'docs/client-workflow.md',
-                    'docs/job-runner-spec.md', 'schemas/research.json', 'schemas/manifest-v2.json'}
+                    'docs/job-runner-spec.md', 'docs/asset-loaders.md', 'examples/asset-loader/loader.py',
+                    'schemas/asset-loader.json', 'schemas/research.json', 'schemas/manifest-v2.json'}
         if not required <= docs.keys():
             raise ValueError('wheel documentation is incomplete: ' + str(sorted(required - docs.keys())))
         docs['skills/research-runner/SKILL.md'] = archive.read('runner/skills/research-runner/SKILL.md')
+    with tarfile.open(source, 'r:gz') as archive:
+        prefix = 'research_runner-' + version + '/'
+        for name, data in docs.items():
+            source_name = 'runner/' + name if name.startswith('skills/') else name
+            member = archive.extractfile(prefix + source_name)
+            if member is None or member.read() != data:
+                raise ValueError('sdist documentation differs from wheel: ' + name)
     docs_name = f'research-runner-docs-{version}.zip'
     with zipfile.ZipFile(directory / docs_name, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
         for name, data in sorted(docs.items()):

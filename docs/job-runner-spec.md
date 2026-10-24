@@ -13,7 +13,7 @@ submission and launch, persistent events and deadlines, graceful finalization re
 complete/partial/blocked outcomes, live checkpoint/artifact generations, bounded
 HTTP monitoring, dashboard controls and verified remote collection.
 
-Large external datasets, arbitrary runtime plugins, worker scheduling, external
+Arbitrary runtime plugins, worker scheduling, external
 worker brokers, provider retries, automatic continuation, domain validators,
 budget extensions and distributed/concurrent execution are unsupported.
 A completed Codex turn must produce closeout files; the MVP does not keep
@@ -63,8 +63,14 @@ runs outside the API event loop so monitoring stays available. Allow disk space
 for the temporary upload, sealed archive and extracted inputs. Links, traversal,
 duplicates, special files and undeclared payloads are rejected. Inputs exceeding
 configured quotas require an explicit quota increase or an explicit scope decision;
-dataset references are unsupported. Preparation must report exclusions rather
+undeclared dataset references are unsupported. Declared external assets use
+the optional v2 `dependencies` array described in [asset loaders](asset-loaders.md). Preparation must report exclusions rather
 than silently drop required dependencies. Credentials never belong in packages.
+
+Operator-registered independent asset loaders resolve, retrieve and verify declared
+dependencies on explicit start, before research execution. Their versioned protocol,
+optional limits, progress events, registration and validation command are specified
+in [the asset loader authoring guide](asset-loaders.md).
 
 V2 requires `outputs/result.json` and `outputs/handoff.md` in `required_outputs`.
 List additional required outputs for full completion. Partial/blocked closeout

@@ -47,6 +47,7 @@ def validate_manifest(m):
     if m.get('format') not in ('research-package/v1','research-package/v2'): raise ValueError('unsupported package format')
     fields = {'format','name','adapter','runtime','brief','agents','skills','inputs','resources','required_outputs'}
     if is_mvp(m): fields.add('policy')
+    if is_mvp(m) and 'dependencies' in m: fields.add('dependencies')
     if set(m) != fields: raise ValueError('manifest fields')
     if m['adapter'] not in ('codex','fixture'): raise ValueError('adapter')
     if not isinstance(m['name'], str) or not m['name'] or len(m['name']) > 100: raise ValueError('name')
@@ -63,6 +64,17 @@ def validate_manifest(m):
     if len(set([m['brief'],m['agents']]+m['skills']+m['inputs']+m['required_outputs'])) != 2+len(m['skills'])+len(m['inputs'])+len(m['required_outputs']): raise ValueError('duplicate paths')
     if any(not p.startswith('outputs/') for p in m['required_outputs']): raise ValueError('required outputs must be outputs/')
     if any(p.startswith('outputs/') or p == 'package.json' for p in declared(m)): raise ValueError('reserved input path')
+    if 'dependencies' in m:
+        from .protocol import AssetDependency
+        if not isinstance(m['dependencies'], list) or len(m['dependencies']) > 100:
+            raise ValueError('dependencies must be a list of at most 100 assets')
+        occupied = declared(m) + ['package.json', 'manifest.json', 'outputs']
+        for dependency in m['dependencies']:
+            asset = AssetDependency.model_validate(dependency)
+            dest = relpath(asset.destination)
+            if any(dest == p or dest.startswith(p+'/') or p.startswith(dest+'/') for p in occupied):
+                raise ValueError('dependency destination overlaps reserved, packaged or dependency path: '+dest)
+            occupied.append(dest)
     r=m['resources']
     for k in ('cpu','memory_mb','time_seconds'):
         if type(r.get(k)) not in (int,float) or not math.isfinite(r[k]) or not 0 < r[k] <= {'cpu':8,'memory_mb':32768,'time_seconds':86400}[k]: raise ValueError(k)

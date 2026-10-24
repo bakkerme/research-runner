@@ -1,0 +1,29 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "asset_type": {
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "title": "Asset Type",
+      "type": "string"
+    },
+    "asset_id": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Asset Id",
+      "type": "string"
+    },
+    "destination": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "title": "Destination",
+      "type": "string"
+    }
+  },
+  "required": [
+    "asset_type",
+    "asset_id",
+    "destination"
+  ],
+  "title": "AssetDependency",
+  "type": "object"
+}

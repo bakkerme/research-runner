@@ -16,14 +16,14 @@ class Control(BaseModel):
 
 from .dashboard import PAGE
 
-def app(root,engine='host',image='research-runner-worker:0.2.0'):
+def app(root,engine='host',image='research-runner-worker:0.2.0',loaders=None):
  from .protocol import capabilities,schemas
  from .package import hash_file,MAX_ARCHIVE
  import secrets
  read_token=os.getenv('RESEARCH_RUNNER_READ_TOKEN');control_token=os.getenv('RESEARCH_RUNNER_CONTROL_TOKEN')
  if bool(read_token)!=bool(control_token) or (read_token and read_token==control_token):
   raise ValueError('configure distinct nonempty read and control tokens, or neither for trusted local use')
- svc=Service(root,engine,image);a=FastAPI()
+ svc=Service(root,engine,image,loaders=loaders);a=FastAPI()
  @a.middleware('http')
  async def auth(request,call_next):
   if request.url.path.startswith('/api/') and read_token:
@@ -45,7 +45,7 @@ def app(root,engine='host',image='research-runner-worker:0.2.0'):
  @a.get('/')
  def page():return HTMLResponse(PAGE)
  @a.get('/api/capabilities')
- def caps():return dict(capabilities(),engine=engine,access='read_control_tokens' if read_token else 'trusted_network',resource_enforcement='container_limits' if engine=='docker' else 'deadline_and_owned_processes')
+ def caps():return dict(capabilities(),asset_types=sorted(svc.loaders),asset_loader_protocol='runner-asset-loader/v1',engine=engine,access='read_control_tokens' if read_token else 'trusted_network',resource_enforcement='container_limits' if engine=='docker' else 'deadline_and_owned_processes')
  @a.get('/api/schemas')
  def contract_schemas():return schemas()
  @a.get('/api/jobs')
