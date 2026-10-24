@@ -57,6 +57,14 @@ Reports include file locations and categories, without echoing matched source
 values. CI runs the same check on the committed tree, even when a contributor
 has not installed the local hook.
 
+In parseable Python files, IPv6 scanning examines decoded string/byte literals,
+f-string literal segments and comments, so slice expressions are not mistaken
+for addresses. Unparseable Python receives the conservative plain-text scan.
+The canonical public GitHub owner/repository coordinates (URLs and GitHub CLI
+repository arguments) are excluded only from local-marker matching; URL paths,
+queries and all other detection rules still
+apply. Other repositories and lookalike URLs receive no such exception.
+
 Add private project names, account names, hostnames, mount paths or identifiers
 to the ignored `.portability-local.txt` in the repository root, one literal value
 per line. Blank lines and lines beginning with `#` are ignored. Do not commit this

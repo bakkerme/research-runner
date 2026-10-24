@@ -3,7 +3,9 @@
 Standard-library only: suitable for a Git hook before dependencies are installed.
 """
 import argparse
+import ast
 import getpass
+import io
 import ipaddress
 import os
 from pathlib import Path
@@ -11,6 +13,7 @@ import re
 import socket
 import subprocess
 import sys
+import tokenize
 
 
 HOME_PATH = re.compile(r"(?<![\w])(?:/(?:Users|home|Volumes)/|[A-Za-z]:[\\/]+(?:Users|Documents and Settings)[\\/]+)([^/\\\s\"'`<>]+)", re.I)
@@ -19,6 +22,11 @@ IPV6 = re.compile(r'(?<![\w:])(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}(?![\w:]
 PRIVATE_HOST = re.compile(r'\b[\w-]+(?:\.[\w-]+)*\.(?:local|internal|lan|home|ts\.net)(?![\w.-])', re.I)
 TOKEN_ASSIGNMENT = re.compile(r'''(?:^\s*(?:export\s+)?|["'])(?:RESEARCH_RUNNER_(?:CONTROL_|READ_)?TOKEN|[A-Z_]*(?:API_KEY|PASSWORD|ACCESS_TOKEN))["']?\s*[:=]\s*["']?([^\s"'`,;]+)''')
 URL_CREDENTIALS = re.compile(r'https?://[^\s/@]+:[^\s/@]+@', re.I)
+PUBLIC_REPOSITORY = 'https://github.com/bakkerme/research-runner'
+PUBLIC_COORDINATES = re.compile(
+    r'(?<![\w/.-])(?:https://github\.com/)?'
+    + re.escape(PUBLIC_REPOSITORY.removeprefix('https://github.com/'))
+    + r'''(?=$|[/\s?#<>"'`)\]])''')
 EXAMPLE_USERS = {'user', 'username', 'example', 'your-user', 'your-username', 'public'}
 EXAMPLE_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
     '192.0.2.0/24', '198.51.100.0/24', '203.0.113.0/24', '2001:db8::/32'))
@@ -40,12 +48,9 @@ def local_markers(root):
     return sorted(values)
 
 
-def reasons(text, markers):
+def address_reasons(text, patterns):
     found = set()
-    for match in HOME_PATH.finditer(text):
-        if match[1].lower() not in EXAMPLE_USERS:
-            found.add('personal home directory')
-    for pattern in (IPV4, IPV6):
+    for pattern in patterns:
         for match in pattern.finditer(text):
             try:
                 address = ipaddress.ip_address(match[0])
@@ -56,6 +61,14 @@ def reasons(text, markers):
             if any(address.version == net.version and address in net for net in EXAMPLE_NETWORKS):
                 continue
             found.add('literal network address; use configuration or a documentation address')
+    return found
+
+
+def reasons(text, markers, *, ipv6=True):
+    found = address_reasons(text, (IPV4, IPV6) if ipv6 else (IPV4,))
+    for match in HOME_PATH.finditer(text):
+        if match[1].lower() not in EXAMPLE_USERS:
+            found.add('personal home directory')
     if PRIVATE_HOST.search(text):
         found.add('private hostname')
     for match in TOKEN_ASSIGNMENT.finditer(text):
@@ -64,10 +77,30 @@ def reasons(text, markers):
             found.add('literal credential assignment; use environment configuration')
     if URL_CREDENTIALS.search(text) or re.search(r'-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----', text):
         found.add('embedded credentials or private key')
-    if any(re.search(r'(?<!\w)' + re.escape(value) + r'(?!\w)', text, re.I)
+    # Exempt only the project's public owner/repository coordinates from marker
+    # matching. URL suffixes and all other detection rules still see the source.
+    marker_text = PUBLIC_COORDINATES.sub('', text)
+    if any(re.search(r'(?<!\w)' + re.escape(value) + r'(?!\w)', marker_text, re.I)
            for value in markers):
         found.add('local user, hostname or private marker')
     return sorted(found)
+
+
+def python_ipv6_text(text):
+    """IPv6 in Python is data, not expression punctuation. Never execute source."""
+    try:
+        tree = ast.parse(text)
+        tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    except (SyntaxError, ValueError, tokenize.TokenError):
+        # Unparseable source gets the conservative plain-text scan.
+        return None
+    values = [(node.lineno, node.value.decode('utf-8', errors='replace')
+               if isinstance(node.value, bytes) else node.value)
+              for node in ast.walk(tree)
+              if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes))]
+    values.extend((token.start[0], token.string) for token in tokens
+                  if token.type == tokenize.COMMENT)
+    return values
 
 
 def private_file(path):
@@ -90,9 +123,15 @@ def inspect(path, data, label, markers):
     # Binary assets need separate review; do not print source values or secrets.
     if b'\0' in data:
         return issues
-    for number, line in enumerate(data.decode('utf-8', errors='replace').splitlines(), 1):
-        for reason in reasons(line, markers):
+    text = data.decode('utf-8', errors='replace')
+    ipv6_values = python_ipv6_text(text) if Path(path).suffix == '.py' else None
+    for number, line in enumerate(text.splitlines(), 1):
+        for reason in reasons(line, markers, ipv6=ipv6_values is None):
             issues.append(f'{label}:{path}:{number}: {reason}')
+    if ipv6_values is not None:
+        for number, value in ipv6_values:
+            for reason in sorted(address_reasons(value, (IPV6,))):
+                issues.append(f'{label}:{path}:{number}: {reason}')
     return issues
 
 

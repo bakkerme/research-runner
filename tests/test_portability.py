@@ -81,6 +81,47 @@ def test_generic_examples_and_canonical_public_urls_are_allowed(repo):
     assert check(repo).returncode == 0
 
 
+def test_python_slice_syntax_is_not_an_ipv6_address(repo):
+    step = ':' * 2 + '2'
+    (repo / 'slices.py').write_text(
+        f'values = range(10)\na = values[{step}]\nb = values[1{step}]\n'
+        f'c = values[{{"key": 1}}["key"]{step}]\n'
+        f'd = f"{{values[{step}]}}"\n')
+    assert check(repo).returncode == 0
+
+
+@pytest.mark.parametrize('context', ['string', 'comment', 'fstring', 'escaped', 'invalid-python'])
+def test_python_ipv6_literals_and_comments_still_rejected(repo, context):
+    address = ':'.join(('fd12', '3456', '', '2'))
+    sources = {
+        'string': f'host = "{address}"\n',
+        'comment': f'# server: {address}\n',
+        'fstring': f'host = f"http://[{address}]:{{port}}"\n',
+        'escaped': 'host = ' + repr(address).replace(':', r'\x3a') + '\n',
+        'invalid-python': f'host = "{address}"\nunfinished = (\n',
+    }
+    (repo / 'settings.py').write_text(sources[context])
+    result = check(repo)
+    assert result.returncode == 1
+    assert 'literal network address' in result.stderr
+
+
+def test_public_repository_coordinates_do_not_trigger_local_markers():
+    public = 'https://github.com/bakkerme/research-runner'
+    owner = public.split('/')[3]
+    for suffix in ('', '/', '/releases/download/v0.3.0/example.whl', '/actions/workflows/test.yml'):
+        assert guard.reasons(public + suffix, [owner]) == []
+    assert guard.reasons('gh run view --repo ' + '/'.join(public.split('/')[-2:]), [owner]) == []
+    # Only the canonical owner/repository coordinates are public exceptions.
+    for text in (owner, f'https://github.com/{owner}/private-project',
+                 public + '-private', public + '/' + owner,
+                 public + '?account=' + owner, public + '.example.test',
+                 'https://example.test/' + '/'.join(public.split('/')[-2:])):
+        assert 'local user, hostname or private marker' in guard.reasons(text, [owner])
+    text = public + ' ' + private_address()
+    assert any('literal network address' in reason for reason in guard.reasons(text, [owner]))
+
+
 def test_local_markers_and_ignored_files(repo):
     (repo / '.gitignore').write_text('.portability-local.txt\n.env\n')
     marker = 'lab'
