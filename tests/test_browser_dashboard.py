@@ -257,3 +257,36 @@ def test_compact_reader_files_themes_and_mobile():
   page.locator('.event').click();expect(page.locator('#event-reader .reader-text')).to_have_text('The checksum matches.')
   assert not errors
   browser.close()
+
+
+@pytest.mark.skipif(os.environ.get('RR_BROWSER_TEST')!='1',reason='requires local Chromium')
+def test_asset_progress_shows_download_byte_counts(tmp_path):
+ """Exercise the shipped renderer with a real persisted preparation event."""
+ from playwright.sync_api import sync_playwright
+ from test_http_client import server as server_fixture
+ from runner.store import Store
+ fixture=server_fixture.__wrapped__(tmp_path)
+ control,reader=next(fixture)
+ try:
+  store=Store(tmp_path/'state/state.sqlite3')
+  jid='d'*32
+  store.submit(jid,'asset-download','fixture','asset-progress','0'*64)
+  with store.db() as connection:
+   store.event(connection,jid,1,'asset_progress',{'asset_type':'model','asset_id':'weights/v1','destination':'inputs/model','message':'Downloading model weights','bytes_completed':1048576,'bytes_total':8388608})
+  with sync_playwright() as pw:
+   browser=pw.chromium.launch(headless=True,executable_path=os.environ.get('RR_BROWSER_EXECUTABLE','/usr/bin/chromium'),args=['--no-sandbox'])
+   page=browser.new_page();errors=[]
+   page.on('pageerror',lambda error:errors.append(str(error)))
+   page.goto(control.url)
+   page.locator('#session-menu summary').click();page.locator('#token').fill('test-read');page.get_by_role('button',name='Sign in').click()
+   page.locator('.row').first.click()
+   page.get_by_role('heading',name='asset-download · queued').wait_for()
+   page.locator('#events .event').filter(has_text='Downloading model weights').wait_for()
+   text=page.locator('#events').inner_text()
+   assert 'weights/v1' in text and 'inputs/model' in text
+   assert '1,048,576 / 8,388,608 bytes' in text
+   assert not errors
+   browser.close()
+ finally:
+  try:next(fixture)
+  except StopIteration:pass

@@ -77,6 +77,8 @@ class Client:
         caps = self.request('/api/capabilities')
         if manifest['format'] not in caps['package_formats']:
             raise ValueError('server does not support this package format')
+        if manifest.get('dependencies') and not caps.get('features', {}).get('asset_dependencies'):
+            raise ValueError('server does not support asset dependencies')
         limits = caps.get('limits', {})
         if archive.stat().st_size > limits.get('archive_bytes', float('inf')):
             raise ValueError('archive exceeds server upload limit')

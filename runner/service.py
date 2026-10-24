@@ -23,7 +23,9 @@ class StateLockedError(RuntimeError):
 
 
 class Service:
- def __init__(self,root,engine='host',image='research-runner-worker:0.2.0'):
+ def __init__(self,root,engine='host',image='research-runner-worker:0.2.0',loaders=None):
+  from .assets import cleanup_orphan
+  self.loaders=loaders or {};self.preparing={}
   self.root=pathlib.Path(root).resolve();self.root.mkdir(parents=True,exist_ok=True)
   self._owner=(self.root/'service.lock').open('a+b')
   try:fcntl.flock(self._owner,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -46,6 +48,7 @@ class Service:
   if self.auth_file and (not self.auth_file.is_file() or ':' in str(self.auth_file)):
    raise ValueError('Codex auth projection must name a regular host file')
   self.procs={};self.stopping=set();self.lock=threading.Lock();self.controls=threading.RLock()
+  for marker in (self.root/'jobs').glob('*/assets/loader-runtime.json'):cleanup_orphan(marker)
   self._kill_orphans();self.store.reconcile()
   known={j['id'] for j in self.store.list()}
   for p in (self.root/'jobs').glob('*'):
@@ -123,6 +126,7 @@ class Service:
    p=self.path(jid);m=self.manifest(jid)
    if j['state'] not in ACTIVE and (jid in self.procs or (p/'runtime.json').exists()):
     raise ValueError('previous worker cleanup is not yet confirmed; reconcile before resume')
+   docker_user=None
    if self.engine=='docker':
     if not {'image','image_id'}<=set(m['runtime']):raise ValueError('containerized Codex requires an explicitly pinned worker image')
     inspect=subprocess.run(['docker','image','inspect',m['runtime']['image'],'--format','{{.Id}}'],capture_output=True,text=True)
@@ -141,12 +145,37 @@ class Service:
     old=p/'work/outputs/result.json'
     if old.exists() or old.is_symlink():
      retained=p/'retained';retained.mkdir(exist_ok=True);old.rename(retained/f'result-before-{attempt}.json')
+   if m.get('dependencies'):
+    cancel=threading.Event();self.preparing[jid]=cancel
+    threading.Thread(target=self._prepare_launch,args=(jid,m,attempt,token,input_text,result,cancel,docker_user),daemon=True).start()
+    return result
+   return self._launch_worker(jid,m,attempt,token,input_text,result,docker_user)
+
+ def _prepare_launch(self,jid,m,attempt,token,input_text,result,cancel,docker_user):
+  from .assets import prepare
+  try:
+   prepare(self.path(jid),m['dependencies'],self.loaders,
+           progress=lambda data:self.store.append(jid,attempt,token,'asset_progress',data),
+           cancel=cancel,deadline=self.store.get(jid)['terminate_at'])
+   with self.lock:
+    if cancel.is_set():raise InterruptedError('asset preparation stopped by user')
+    self._launch_worker(jid,m,attempt,token,input_text,result,docker_user)
+  except Exception as error:
+   if self.store.get(jid)['state'] in ACTIVE:self.store.finish(jid,attempt,token,'interrupted' if isinstance(error,(InterruptedError,TimeoutError)) else 'failed',str(error))
+  finally:
+   with self.lock:
+    if self.preparing.get(jid) is cancel:self.preparing.pop(jid,None)
+
+ def _launch_worker(self,jid,m,attempt,token,input_text,result,docker_user):
+   p=self.path(jid)
    if self.engine=='docker':
     name=f'rr-{jid[:12]}-{attempt}'
     cmd=['docker','run','--rm','--name',name,'--label','research-runner.root='+str(self.root),'--cpus',str(m['resources']['cpu']),'--memory',str(m['resources']['memory_mb'])+'m','--pids-limit','256','--user',docker_user,'--security-opt','no-new-privileges','--cap-drop','ALL','-v',str((p/'work').resolve())+':/job','-v',str((p/'session').resolve())+':/session','-v',str((p/'requests').resolve())+':/requests','-v',str((p/'inbox').resolve())+':/inbox','-e','CODEX_HOME=/session']
     if is_mvp(m):
      for f in declared(m)+['package.json']:
       cmd+=['-v',str((p/'work'/f).resolve())+':/job/'+f+':ro']
+    for dependency in m.get('dependencies',[]):
+     name=dependency['destination'];cmd+=['-v',str((p/'work'/name).resolve())+':/job/'+name+':ro']
     if m['adapter']=='codex' and self.auth_file:
      cmd+=['-v',str(self.auth_file)+':/session/auth.json:ro']
     if m['adapter']=='fixture' and os.environ.get('RR_FIXTURE_DELAY'):cmd+=['-e','FIXTURE_DELAY='+os.environ['RR_FIXTURE_DELAY']]
@@ -270,9 +299,13 @@ class Service:
   with self.controls:
    result,created=self.store.control(jid,'stop',key,ACTIVE,data={})
    if not created:return result
-   with self.lock:item=self.procs.get(jid)
-   if not item:raise RuntimeError('worker missing; restart service for reconciliation')
-   proc,attempt,token,cmd,m=item;self.stopping.add(jid);self._stop_process(proc,cmd)
+   with self.lock:
+    item=self.procs.get(jid)
+    preparing=self.preparing.get(jid)
+    if not item and preparing:preparing.set()
+   if item:
+    proc,attempt,token,cmd,m=item;self.stopping.add(jid);self._stop_process(proc,cmd)
+   elif not preparing:raise RuntimeError('worker missing; restart service for reconciliation')
    # The watcher retains partial artifacts and owns the terminal transition.
   deadline=time.monotonic()+20
   while self.store.get(jid)['state'] in ACTIVE and time.monotonic()<deadline:time.sleep(.01)
@@ -304,9 +337,14 @@ class Service:
     if any((pathlib.Path(root)/d).is_symlink() for d in dirs):raise ValueError('output links forbidden')
     names.extend((pathlib.Path(root)/f).relative_to(work).as_posix() for f in files)
   else:names=m['required_outputs']
+  receipt=self.path(jid)/'assets/receipt.json'
+  if m.get('dependencies'):
+   names=[n for n in names if n!='outputs/dependencies.json']+['outputs/dependencies.json']
+  if len(names)>MAX_FILES:raise ValueError('too many published output files')
   validated=[];total=0
   for name in sorted(names):
-   data=read_file(work,name);total+=len(data)
+   data=read_file(receipt.parent,'receipt.json') if m.get('dependencies') and name=='outputs/dependencies.json' else read_file(work,name)
+   total+=len(data)
    if total>MAX_TOTAL:raise ValueError('output quota exceeded')
    if mvp and name=='outputs/checkpoint.json':checkpoint=load_contract(Checkpoint,data)
    if final and mvp and name=='outputs/result.json':result=load_contract(Result,data)

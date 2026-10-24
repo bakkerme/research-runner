@@ -6,3 +6,5 @@ recursive-include tools *.py
 recursive-include sample *.md *.json *.txt
 recursive-include sample-mvp *.md *.json *.txt
 recursive-include sample-codex *.md *.json *.txt
+
+recursive-include examples *.py *.json *.toml *.md

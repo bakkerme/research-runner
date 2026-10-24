@@ -1,0 +1,6 @@
+# Install the example separately and replace these absolute paths.
+[asset_loaders.local-files]
+command = ["/usr/bin/python3", "/opt/private-assets/loader.py", "--catalog", "/etc/research-runner/catalog.json"]
+# Optional positive values; omit for no loader-specific cap.
+# timeout_seconds = 300
+# max_bytes = 10737418240

@@ -20,6 +20,12 @@ class Policy(Contract):
         return self
 
 
+class AssetDependency(Contract):
+    asset_type: StrictStr = Field(pattern='^[a-z][a-z0-9-]{0,63}$')
+    asset_id: StrictStr = Field(min_length=1, max_length=2000)
+    destination: StrictStr = Field(min_length=1, max_length=2000)
+
+
 class Checkpoint(Contract):
     format: Literal['runner-checkpoint/v1']
     summary: StrictStr = Field(min_length=1, max_length=8000)
@@ -146,6 +152,7 @@ def capabilities():
                    'archive_bytes': MAX_ARCHIVE, 'files': MAX_FILES, 'contract_bytes': 65536,
                    'output_file_bytes': MAX_FILE, 'output_total_bytes': MAX_TOTAL},
         'features': {'bounded_runs': True, 'graceful_finalize': True,
+                     'asset_dependencies': True,
                      'worker_deadline_failsafe': True,
                      'container_auth_file_projection': True, 'container_auth_refresh_qualified': False,
                      'partial_artifacts': True, 'event_paging': True,
@@ -157,7 +164,8 @@ def capabilities():
 
 def schemas():
     result = {name: model.model_json_schema() for name, model in
-              [('policy', Policy), ('checkpoint', Checkpoint), ('result', Result), ('research', ResearchReport)]}
+              [('policy', Policy), ('checkpoint', Checkpoint), ('result', Result), ('research', ResearchReport),
+               ('asset-dependency', AssetDependency)]}
     path = {'type': 'string', 'minLength': 1,
             'description': 'Normalized relative POSIX path; no traversal, links or reserved input paths.'}
     paths = {'type': 'array', 'items': path, 'uniqueItems': True}
@@ -178,9 +186,13 @@ def schemas():
                                               for name in ['outputs/result.json', 'outputs/handoff.md']]),
         'policy': result['policy'],
     }
+    from .asset_protocol import schema as asset_loader_schema
+    result['asset-loader'] = asset_loader_schema()
     result['manifest-v2'] = {
         '$schema': 'https://json-schema.org/draft/2020-12/schema', 'type': 'object',
         'additionalProperties': False, 'required': list(properties), 'properties': properties,
         'description': 'Cross-field/path, dependency and archive constraints are additionally checked by research-runner verify.',
     }
+    properties['dependencies'] = {'type': 'array', 'maxItems': 100,
+                                  'items': result['asset-dependency']}
     return result

@@ -50,3 +50,15 @@ Research-side validation is part of the work. A collection hash verifies deliver
 bytes; report the research's validation separately and qualify anything not
 independently reproduced. Run returned commands only when within the user's
 authorized scope, after reviewing their inputs and effects.
+
+## External asset dependencies and independent loaders
+
+Payloads may declare v2 `dependencies` using `asset_type`, `asset_id` and
+`destination`. Server operators register independently installed loaders; payloads
+cannot install or select executable code. For private loader development in a
+separate project, read `docs/asset-loaders.md` and `schemas/asset-loader.json`,
+and use `examples/asset-loader/loader.py` as a standalone reference.
+These files ship with the wheel and `research-runner docs --output DIRECTORY`.
+Validate registration with `research-runner validate-loaders --config FILE`;
+start the server with `serve --loader-config FILE`. Both timeout_seconds and
+max_bytes are optional. Preparation streams progress and respects job stop/deadline.

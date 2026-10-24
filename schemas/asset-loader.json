@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "runner-asset-loader/v1",
+  "$defs": {
+    "describe-request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "operation",
+        "asset_type"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "runner-asset-loader/v1"
+        },
+        "operation": {
+          "const": "describe"
+        },
+        "asset_type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        }
+      }
+    },
+    "resolve-request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "operation",
+        "asset_type",
+        "asset_id"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "runner-asset-loader/v1"
+        },
+        "operation": {
+          "const": "resolve"
+        },
+        "asset_type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "asset_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    },
+    "materialize-request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "operation",
+        "asset_type",
+        "asset_id",
+        "resolved_id",
+        "sha256",
+        "staging_directory"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "runner-asset-loader/v1"
+        },
+        "operation": {
+          "const": "materialize"
+        },
+        "asset_type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "asset_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "resolved_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "staging_directory": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "describe-result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "protocol",
+        "loader_version",
+        "operations"
+      ],
+      "properties": {
+        "event": {
+          "const": "result"
+        },
+        "protocol": {
+          "const": "runner-asset-loader/v1"
+        },
+        "loader_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "resolve",
+              "materialize"
+            ]
+          },
+          "uniqueItems": true,
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "resolve-result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "protocol",
+        "resolved_id",
+        "sha256"
+      ],
+      "properties": {
+        "event": {
+          "const": "result"
+        },
+        "protocol": {
+          "const": "runner-asset-loader/v1"
+        },
+        "resolved_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "materialize-result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "protocol",
+        "materialized"
+      ],
+      "properties": {
+        "event": {
+          "const": "result"
+        },
+        "protocol": {
+          "const": "runner-asset-loader/v1"
+        },
+        "materialized": {
+          "const": true
+        }
+      }
+    },
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "message"
+      ],
+      "properties": {
+        "event": {
+          "const": "progress"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "bytes_completed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytes_total": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "code"
+      ],
+      "properties": {
+        "event": {
+          "const": "error"
+        },
+        "code": {
+          "enum": [
+            "not_found",
+            "access_denied",
+            "unavailable",
+            "invalid_request"
+          ]
+        }
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/describe-request"
+    },
+    {
+      "$ref": "#/$defs/resolve-request"
+    },
+    {
+      "$ref": "#/$defs/materialize-request"
+    },
+    {
+      "$ref": "#/$defs/describe-result"
+    },
+    {
+      "$ref": "#/$defs/resolve-result"
+    },
+    {
+      "$ref": "#/$defs/materialize-result"
+    },
+    {
+      "$ref": "#/$defs/progress"
+    },
+    {
+      "$ref": "#/$defs/error"
+    }
+  ]
+}

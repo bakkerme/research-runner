@@ -13,5 +13,5 @@ class BuildPy(build_py):
         for name in ('README.md', 'AGENTS.md'):
             target.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source / name, target / name)
-        for folder in ('docs', 'schemas'):
+        for folder in ('docs', 'schemas', 'examples'):
             shutil.copytree(source / folder, target / folder, dirs_exist_ok=True)
