@@ -18,6 +18,6 @@ __pycache__/
 *.tar.gz
 *.patch
 
-# Preserve the image IDs already configured on DGX.
+# Preserve the image IDs already configured on the destination host.
 /sample/manifest.json
 /sample-codex/manifest.json

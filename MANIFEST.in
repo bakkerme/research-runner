@@ -1,4 +1,5 @@
 include build_support.py README.md AGENTS.md Dockerfile
+include .githooks/pre-push
 recursive-include docs *.md
 recursive-include schemas *.json
 recursive-include runner/skills *.md
