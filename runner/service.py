@@ -221,12 +221,17 @@ class Service:
      if is_mvp(m):
       state=self.store.get(jid)['state']
       if state not in ACTIVE:return
-      if now>=soft and state=='running':self.finalize(jid,f'deadline-{jid}-{attempt}','budget_exhausted')
+      if now>=soft and state=='running':
+       try:self.finalize(jid,f'deadline-{jid}-{attempt}','budget_exhausted')
+       except ValueError:pass # state changed concurrently (finished/stopped/finalizing)
       elif state=='finalizing':self._signal_finalize(jid)
       if now-last>=m['policy']['checkpoint_seconds']:
        last=now
+       # Checkpoints are best effort; a bad intermediate output must not kill the run.
        try:self._publish(jid,m,attempt,token,final=False)
-       except (ValueError,OSError):pass # atomically rewritten outputs may be incomplete
+       except Exception as error:
+        try:self.store.append(jid,attempt,token,'progress',{'message':'checkpoint skipped: '+str(error)[:500]})
+        except ValueError:pass
     except Exception as e:
      supervisor_errors.append(str(e));forced.set()
      try:self._stop_process(proc,cmd)
@@ -252,10 +257,7 @@ class Service:
     kind=v.get('kind') if isinstance(v,dict) else None;data=v.get('data') if isinstance(v,dict) else None
     if not isinstance(data,dict) or kind not in ('approval_request','progress','codex','thread','turn','error','finalize_acknowledged'):
      self.store.append(jid,attempt,token,'worker_text',{'line':line[:2000]});continue
-    if kind=='approval_request' and not approval_event_approvable(data):
-     self._decline_unshown_approval(jid,attempt,token,data);continue
-    if kind=='approval_request':self.store.request_approval(jid,attempt,token,data)
-    else:self.store.append(jid,attempt,token,kind,data)
+    self._record(jid,attempt,token,kind,data)
    rc=proc.wait(timeout=max(.1,hard-time.monotonic()))
    done.set();timer.join(timeout=15)
    if forced.is_set():raise TimeoutError('deadline forced' if not supervisor_errors else '; '.join(supervisor_errors))
@@ -284,12 +286,37 @@ class Service:
     (self.path(jid)/'runtime.json').unlink(missing_ok=True)
    with self.lock:self.procs.pop(jid,None);self.stopping.discard(jid)
 
+ def _record(self,jid,attempt,token,kind,data):
+  # State can legitimately move (running->finalizing, stop) between the worker
+  # writing an event and the controller recording it. That is not a job failure.
+  # A clipped approval is not a pending decision, including during finalization.
+  if kind=='approval_request' and not approval_event_approvable(data):
+   self._decline_unshown_approval(jid,attempt,token,data);return
+  try:
+   if kind=='approval_request':self.store.request_approval(jid,attempt,token,data)
+   else:self.store.append(jid,attempt,token,kind,data)
+  except ValueError:
+   j=self.store.get(jid)
+   if not j or j['attempt']!=attempt or j['token']!=token or j['state'] not in ACTIVE:return
+   if kind=='approval_request' and j['state']=='finalizing':
+    self._decline_approval_file(jid,data.get('id'))
+    try:self.store.append(jid,attempt,token,'progress',{'message':'approval auto-declined during finalization','id':data.get('id')})
+    except ValueError:pass
+    return
+   raise
+
  def _decline_unshown_approval(self,jid,attempt,token,data):
   # A partial approval must not stay pending. Decline it so the worker does
   # not run the command, and record why Accept was not offered.
   try:self.store.append(jid,attempt,token,'progress',{'message':'approval declined; the request does not fit in one event','id':data.get('id') if isinstance(data.get('id'),str) else None})
   except ValueError:return
-  rid=data.get('id')
+  self._decline_approval_file(jid,data.get('id'))
+
+ def _decline_approval_file(self,jid,rid):
+  # The worker names the response file with this id. Only the uuid4 hex form
+  # is safe to join under requests/; anything else could escape the job directory.
+  # The temporary name is created with O_NOFOLLOW so a worker-planted symlink
+  # cannot redirect this unattended write outside the job directory.
   if not isinstance(rid,str) or len(rid)!=32 or any(c not in '0123456789abcdef' for c in rid):return
   try:self._write_request_file(self.path(jid)/'requests'/(rid+'.json'),json.dumps({'decision':'decline'}))
   except OSError:return
