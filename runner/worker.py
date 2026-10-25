@@ -22,6 +22,32 @@ def atomic(path,data):
  tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(data));tmp.replace(path)
 
 
+def followup_prompt(status, failed, mvp, finalizing):
+ """Instruction for one more turn on the same thread.
+
+ MVP closeout files are not the v1 contract. A retried v1 turn must keep
+ writing the manifest's required outputs.
+ """
+ lead=('RUNNER: the previous turn ended with status '+str(status)+'. ') if failed else 'RUNNER: '
+ if mvp:
+  task=('Write outputs/result.json and outputs/handoff.md now.' if finalizing
+        else 'Continue the brief; result.json/handoff.md closeout is still required.')
+ else:
+  task='Continue the brief and write the manifest required outputs.'
+ return lead+task
+
+
+def attempt_time_left(deadline, time_seconds, now, started):
+ """Seconds until this attempt's controller deadline.
+
+ Non-MVP workers are not passed --deadline. Their budget is the manifest
+ time limit measured from process start, which is when the controller's
+ hard stop begins.
+ """
+ end=deadline if deadline else started+float(time_seconds)
+ return end-now
+
+
 def turn_followup(status, saw_completed, missing_closeout, retries_left, time_left, reserve=15):
  """Return accept, retry, or fail after one Codex turn stream ends.
 
@@ -139,15 +165,16 @@ def main():
      for f in sorted(pathlib.Path(a.input_dir).glob('*.json')):
       try:text=inbox_text(f)
       except ValueError as bad:
-       emit('error',{'message':'discarding unreadable input '+f.name+': '+str(bad)});f.unlink(missing_ok=True);continue
+       emit('error',{'message':'discarding unreadable input '+f.name+': '+str(bad),'fatal':False});f.unlink(missing_ok=True);continue
       holder['turn'].steer(text);f.unlink()
       emit('progress',{'message':'User input sent to active turn'})
     except Exception as e:
      # Transient steer failures (turn boundary, SDK hiccup) are retried next tick.
      message='control delivery failed: '+str(e)
-     if message not in reported:reported.add(message);emit('error',{'message':message})
+     if message not in reported:reported.add(message);emit('error',{'message':message,'fatal':False})
   control_thread=threading.Thread(target=controls,daemon=True);control_thread.start()
   retries=int(os.environ.get('RESEARCH_RUNNER_TURN_RETRIES','2'))
+  started_at=time.time()
   def closeout_missing():
    return is_mvp(m) and not ((root/'outputs/result.json').exists() and (root/'outputs/handoff.md').exists())
   try:
@@ -160,19 +187,17 @@ def main():
       saw=True;turn=data.get('turn') if isinstance(data,dict) else None
       status=turn.get('status') if isinstance(turn,dict) else None
     missing=closeout_missing()
-    time_left=(a.deadline-time.time()) if a.deadline else 1e9
+    time_left=attempt_time_left(a.deadline,m['resources']['time_seconds'],time.time(),started_at)
     action=turn_followup(status,saw,missing,retries,time_left)
     if action=='accept':break
     if action=='fail':raise RuntimeError('Codex turn ended: '+str(status))
     retries-=1
     failed=saw and status!='completed'
     emit('progress',{'message':'Continuing after turn status '+str(status)+('; closeout missing' if missing else '')})
-    start_turn(('RUNNER: the previous turn ended with status '+str(status)+'. ' if failed else 'RUNNER: ')+
-               ('Write outputs/result.json and outputs/handoff.md now.' if finalizing.is_set() or (requests/'finalize.json').exists()
-                else 'Continue the brief; result.json/handoff.md closeout is still required.'))
+    start_turn(followup_prompt(status,failed,is_mvp(m),finalizing.is_set() or (requests/'finalize.json').exists()))
   finally:done.set()
 
 if __name__=='__main__':
  try:main()
  except BaseException as e:
-  emit('error',{'message':str(e),'type':type(e).__name__});sys.exit(1)
+  emit('error',{'message':str(e),'type':type(e).__name__,'fatal':True});sys.exit(1)

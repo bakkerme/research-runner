@@ -201,7 +201,7 @@ class Service:
 
  def _watch(self,jid):
   proc,attempt,token,cmd,m=self.procs[jid];done=threading.Event();forced=threading.Event()
-  supervisor_errors=[];stderr=collections.deque(maxlen=20);last_error=[None]
+  supervisor_errors=[];stderr=collections.deque(maxlen=20);fatal_error=[None];advisory=[None]
   def drain():
    while True:
     line=proc.stderr.readline(4096)
@@ -257,13 +257,18 @@ class Service:
     kind=v.get('kind') if isinstance(v,dict) else None;data=v.get('data') if isinstance(v,dict) else None
     if not isinstance(data,dict) or kind not in ('approval_request','progress','codex','thread','turn','error','finalize_acknowledged'):
      self.store.append(jid,attempt,token,'worker_text',{'line':line[:2000]});continue
-    if kind=='error' and isinstance(data.get('message'),str):last_error[0]=data['message'][:2000]
+    if kind=='error' and isinstance(data.get('message'),str):
+     # Control-loop notes are fatal:false. They must not hide the worker's own exception.
+     message=data['message'][:2000]
+     if data.get('fatal') is False:advisory[0]=message
+     else:fatal_error[0]=message
     self._record(jid,attempt,token,kind,data)
    rc=proc.wait(timeout=max(.1,hard-time.monotonic()))
    done.set();timer.join(timeout=15)
    if forced.is_set():raise TimeoutError('deadline forced' if not supervisor_errors else '; '.join(supervisor_errors))
    if jid in self.stopping:raise InterruptedError('stopped by user')
-   if rc:raise RuntimeError(('worker exit '+str(rc)+': '+last_error[0]) if last_error[0] else (''.join(stderr)[-2000:] or 'worker exit '+str(rc)))
+   reason=fatal_error[0] or advisory[0]
+   if rc:raise RuntimeError(('worker exit '+str(rc)+': '+reason) if reason else (''.join(stderr)[-2000:] or 'worker exit '+str(rc)))
    # Closeout is only accepted once all execution owned by this attempt is stopped.
    self._stop_process(proc,cmd)
    self._publish(jid,m,attempt,token,final=True)
