@@ -19,6 +19,19 @@ from .protocol import Checkpoint, Result, is_mvp, load_contract, validate_resear
 from .store import ACTIVE, Store
 
 
+def cleanup_seconds():
+ """How long to wait for a killed worker group to disappear.
+
+ Emulators and GPU processes can sit in uninterruptible sleep for several
+ seconds after SIGKILL; a 2s/5s wait turned successful runs into
+ 'cleanup unconfirmed'. Read on use so RESEARCH_RUNNER_CLEANUP_SECONDS can
+ change without reimporting. Invalid values keep the 20 second default.
+ """
+ try:value=float(os.environ.get('RESEARCH_RUNNER_CLEANUP_SECONDS','20'))
+ except ValueError:return 20.0
+ return value if value>0 else 20.0
+
+
 class StateLockedError(RuntimeError):
  pass
 
@@ -85,18 +98,18 @@ class Service:
   except ProcessLookupError:pass
 
  def _verify_group(self,pid):
-  deadline=time.monotonic()+2
+  deadline=time.monotonic()+cleanup_seconds()
   while True:
-   probe=subprocess.run(['ps','-axo','pgid=,stat='],capture_output=True,text=True,timeout=2)
+   probe=subprocess.run(['ps','-axo','pgid=,stat='],capture_output=True,text=True,timeout=10)
    if probe.returncode:raise RuntimeError('cannot verify owned process cleanup')
    alive=any(parts[0]==str(pid) and not parts[1].startswith('Z')
              for line in probe.stdout.splitlines() if len(parts:=line.split())>=2)
    if not alive:return
    if time.monotonic()>=deadline:raise RuntimeError('owned process group survived termination')
-   time.sleep(.025)
+   time.sleep(.1)
 
  def _remove_container(self,name):
-  result=subprocess.run(['docker','rm','-f',name],capture_output=True,text=True,timeout=10)
+  result=subprocess.run(['docker','rm','-f',name],capture_output=True,text=True,timeout=max(30,cleanup_seconds()))
   inspect=subprocess.run(['docker','inspect',name],capture_output=True,text=True,timeout=10)
   if inspect.returncode==0 or (result.returncode and 'No such' not in result.stderr):
    raise RuntimeError('container cleanup unconfirmed: '+name)
@@ -378,7 +391,8 @@ class Service:
  def _stop_process(self,proc,cmd):
   # Kill the whole process group, including descendants after leader exit.
   self._kill_group(proc.pid)
-  proc.wait(timeout=5)
+  try:proc.wait(timeout=cleanup_seconds())
+  except subprocess.TimeoutExpired:pass # _verify_group below is authoritative
   self._verify_group(proc.pid)
   if self.engine=='docker':self._remove_container(cmd[cmd.index('--name')+1])
 
