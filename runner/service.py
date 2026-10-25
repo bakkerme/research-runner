@@ -13,7 +13,7 @@ import time
 import uuid
 
 from .files import read_file
-from .events import MAX_EVENT_CHARS
+from .events import MAX_EVENT_CHARS, approval_event_approvable
 from .package import MAX_FILE, MAX_FILES, MAX_TOTAL, declared, deploy, digest, relpath, read_manifest, hash_file, MAX_ARCHIVE
 from .protocol import Checkpoint, Result, is_mvp, load_contract, validate_research
 from .store import ACTIVE, Store
@@ -192,7 +192,7 @@ class Service:
    for private in ('RESEARCH_RUNNER_READ_TOKEN','RESEARCH_RUNNER_CONTROL_TOKEN','RESEARCH_RUNNER_CODEX_AUTH_FILE'):
     env.pop(private,None)
    if self.engine=='docker':env.pop('OPENAI_API_KEY',None)
-   try:proc=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1,env=env,start_new_session=True)
+   try:proc=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,errors='replace',bufsize=1,env=env,start_new_session=True)
    except Exception as e:self.store.finish(jid,attempt,token,'failed',str(e));raise
    (p/'runtime.json').write_text(json.dumps({'pid':proc.pid,'attempt':attempt}))
    self.procs[jid]=(proc,attempt,token,cmd,m)
@@ -238,16 +238,24 @@ class Service:
    while True:
     line=proc.stdout.readline(MAX_EVENT_CHARS+1)
     if not line:break
-    if len(line)>MAX_EVENT_CHARS:raise ValueError('worker event exceeds 1 MiB')
+    if len(line)>MAX_EVENT_CHARS:
+     # Oversized telemetry is recorded and skipped; it never ends the run.
+     # readline stops at the cap, so a line that does not end here continues.
+     size=len(line)
+     while line and not line.endswith('\n'):
+      line=proc.stdout.readline(MAX_EVENT_CHARS+1);size+=len(line)
+     self.store.append(jid,attempt,token,'worker_text',{'line':'[oversized worker line discarded]','chars':size})
+     continue
     try:v=json.loads(line)
     except json.JSONDecodeError:
      self.store.append(jid,attempt,token,'worker_text',{'line':line[:2000]});continue
-    kind=v['kind'];data=v['data']
-    if not isinstance(data,dict):raise ValueError('invalid worker payload')
+    kind=v.get('kind') if isinstance(v,dict) else None;data=v.get('data') if isinstance(v,dict) else None
+    if not isinstance(data,dict) or kind not in ('approval_request','progress','codex','thread','turn','error','finalize_acknowledged'):
+     self.store.append(jid,attempt,token,'worker_text',{'line':line[:2000]});continue
+    if kind=='approval_request' and not approval_event_approvable(data):
+     self._decline_unshown_approval(jid,attempt,token,data);continue
     if kind=='approval_request':self.store.request_approval(jid,attempt,token,data)
-    elif kind in ('progress','codex','thread','turn','error','finalize_acknowledged'):
-     self.store.append(jid,attempt,token,kind,data)
-    else:raise ValueError('invalid worker event')
+    else:self.store.append(jid,attempt,token,kind,data)
    rc=proc.wait(timeout=max(.1,hard-time.monotonic()))
    done.set();timer.join(timeout=15)
    if forced.is_set():raise TimeoutError('deadline forced' if not supervisor_errors else '; '.join(supervisor_errors))
@@ -275,6 +283,35 @@ class Service:
    if self.store.get(jid)['error'] is None or 'cleanup unconfirmed' not in self.store.get(jid)['error']:
     (self.path(jid)/'runtime.json').unlink(missing_ok=True)
    with self.lock:self.procs.pop(jid,None);self.stopping.discard(jid)
+
+ def _decline_unshown_approval(self,jid,attempt,token,data):
+  # A partial approval must not stay pending. Decline it so the worker does
+  # not run the command, and record why Accept was not offered.
+  try:self.store.append(jid,attempt,token,'progress',{'message':'approval declined; the request does not fit in one event','id':data.get('id') if isinstance(data.get('id'),str) else None})
+  except ValueError:return
+  rid=data.get('id')
+  if not isinstance(rid,str) or len(rid)!=32 or any(c not in '0123456789abcdef' for c in rid):return
+  try:self._write_request_file(self.path(jid)/'requests'/(rid+'.json'),json.dumps({'decision':'decline'}))
+  except OSError:return
+
+ def _write_request_file(self,dest,text):
+  """Create dest as a regular file. A symlink at the temporary or final name is removed, not followed."""
+  dest=pathlib.Path(dest)
+  parent=dest.parent
+  if parent.is_symlink() or not parent.is_dir():raise OSError('request directory is not a real directory')
+  tmp=dest.with_suffix('.tmp')
+  flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW
+  payload=text.encode()
+  for _ in range(3):
+   if tmp.is_symlink() or tmp.exists():tmp.unlink()
+   if dest.is_symlink():dest.unlink()
+   try:fd=os.open(tmp,flags,0o644)
+   except FileExistsError:continue
+   try:os.write(fd,payload)
+   finally:os.close(fd)
+   tmp.replace(dest)
+   if not dest.is_symlink() and dest.is_file():return
+  raise OSError('could not write request file')
 
  def _stop_process(self,proc,cmd):
   # Kill the whole process group, including descendants after leader exit.

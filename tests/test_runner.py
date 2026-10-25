@@ -42,7 +42,7 @@ def test_fixture_replay_duplicate_artifacts(tmp_path):
 
 def test_restart_fences_stale_and_approvals(tmp_path):
  st=Store(tmp_path/'state.sqlite3');j,_=st.submit('j','name','fixture','s','0'*64)
- a,t,_,_=st.start_attempt(j);st.request_approval(j,a,t,{'id':'r','turn_id':'turn','attempt':a})
+ a,t,_,_=st.start_attempt(j);st.request_approval(j,a,t,{'id':'r','turn_id':'turn','attempt':a,'details':{}})
  st.reconcile();assert st.get(j)['state']=='interrupted'
  with pytest.raises(ValueError):st.decide(j,'r',a,'turn','accept','k')
  with pytest.raises(ValueError):st.append(j,a,t,'progress',{})
