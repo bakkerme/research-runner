@@ -447,9 +447,10 @@ class Service:
    elif self.store.get(jid)['state'] not in ACTIVE:
     return {'id':jid,'state':self.store.get(jid)['state']}
    # The watcher retains partial artifacts and owns the terminal transition.
-   # A repeated key waits for that transition. The snapshot stored when the
-   # stop was accepted is still the active state, so returning it would
-   # report success before the job has stopped.
+   # A repeated key for this same attempt waits for that transition. The
+   # snapshot stored when the stop was accepted is still the active state, so
+   # returning it would report success before the job has stopped. A later
+   # attempt is applied above instead of waiting here.
   deadline=time.monotonic()+stop_reconcile_timeout()
   while self.store.get(jid)['state'] in ACTIVE and time.monotonic()<deadline:time.sleep(.01)
   if self.store.get(jid)['state'] in ACTIVE:raise RuntimeError('worker stop reconciliation timed out')

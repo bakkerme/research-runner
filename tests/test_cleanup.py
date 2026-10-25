@@ -51,6 +51,35 @@ def test_repeated_stop_times_out_while_the_job_stays_active(tmp_path, monkeypatc
   service._owner.close()
 
 
+def test_reused_stop_key_stops_the_resumed_attempt(tmp_path, monkeypatch):
+ monkeypatch.setattr('runner.service.stop_reconcile_timeout', lambda: 1.0)
+ service = Service(tmp_path / 'state')
+ try:
+  jid = 'ef' * 16
+  service.store.submit(jid, 'name', 'fixture', 'submit-key', '0' * 64)
+  attempt, token, _, _ = service.store.start_attempt(jid)
+  service.store.control(jid, 'stop', 'stop-key', ('running', 'finalizing'), data={})
+  service.store.finish(jid, attempt, token, 'interrupted', 'stopped by user')
+  attempt2, token2, _, _ = service.store.start_attempt(jid)
+  class Proc:
+   pid = 1
+   def wait(self, timeout=None):
+    return 0
+  service.procs[jid] = (Proc(), attempt2, token2, ['worker'], {})
+  stopped = {}
+  def stop_process(proc, cmd):
+   stopped['attempt'] = attempt2
+   service.store.finish(jid, attempt2, token2, 'interrupted', 'stopped by user')
+  service._stop_process = stop_process
+  started = time.monotonic()
+  assert service.stop(jid, 'stop-key')['state'] == 'interrupted'
+  assert stopped['attempt'] == attempt2
+  assert time.monotonic() - started < 0.5
+  assert service.store.get(jid)['attempt'] == attempt2
+ finally:
+  service._owner.close()
+
+
 def test_stop_process_calls_do_not_overlap(tmp_path, monkeypatch):
  monkeypatch.setenv('RESEARCH_RUNNER_CLEANUP_SECONDS', '0.05')
  service = Service(tmp_path / 'state')
