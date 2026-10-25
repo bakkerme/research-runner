@@ -6,12 +6,49 @@ import time
 
 import pytest
 
-from runner.service import Service, cleanup_seconds, supervisor_join_timeout
+from runner.service import Service, cleanup_seconds, stop_reconcile_timeout, supervisor_join_timeout
 
 
 def test_supervisor_join_covers_one_cleanup(monkeypatch):
  monkeypatch.setenv('RESEARCH_RUNNER_CLEANUP_SECONDS', '20')
  assert supervisor_join_timeout() >= 20 * 3
+ assert stop_reconcile_timeout() >= supervisor_join_timeout() + 5
+
+
+def test_repeated_stop_waits_for_the_terminal_state(tmp_path, monkeypatch):
+ monkeypatch.setattr('runner.service.stop_reconcile_timeout', lambda: 1.0)
+ service = Service(tmp_path / 'state')
+ try:
+  jid = 'ab' * 16
+  service.store.submit(jid, 'name', 'fixture', 'submit-key', '0' * 64)
+  attempt, token, _, _ = service.store.start_attempt(jid)
+  service.store.control(jid, 'stop', 'stop-key', ('running', 'finalizing'), data={})
+  def finish():
+   time.sleep(.25)
+   service.store.finish(jid, attempt, token, 'interrupted', 'stopped by user')
+  threading.Thread(target=finish, daemon=True).start()
+  started = time.monotonic()
+  assert service.stop(jid, 'stop-key')['state'] == 'interrupted'
+  assert time.monotonic() - started >= .2
+  assert service.stop(jid, 'stop-key')['state'] == 'interrupted'
+ finally:
+  service._owner.close()
+
+
+def test_repeated_stop_times_out_while_the_job_stays_active(tmp_path, monkeypatch):
+ monkeypatch.setattr('runner.service.stop_reconcile_timeout', lambda: .15)
+ service = Service(tmp_path / 'state')
+ try:
+  jid = 'cd' * 16
+  service.store.submit(jid, 'name', 'fixture', 'submit-key', '0' * 64)
+  service.store.start_attempt(jid)
+  service.store.control(jid, 'stop', 'stop-key', ('running', 'finalizing'), data={})
+  started = time.monotonic()
+  with pytest.raises(RuntimeError, match='worker stop reconciliation timed out'):
+   service.stop(jid, 'stop-key')
+  assert time.monotonic() - started < 1
+ finally:
+  service._owner.close()
 
 
 def test_stop_process_calls_do_not_overlap(tmp_path, monkeypatch):

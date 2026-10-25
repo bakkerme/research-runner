@@ -42,6 +42,18 @@ def supervisor_join_timeout():
  return cleanup_seconds()*3+30
 
 
+def stop_reconcile_timeout():
+ """How long stop() waits for the watcher to leave the active state.
+
+ The watcher joins the supervisor for supervisor_join_timeout before it
+ records the terminal state. The previous wait was 20s against a 15s join,
+ so this stays five seconds longer than the join. A shorter wait makes
+ stop() raise while the job is still active, and repeating the same key
+ then returns that active snapshot without waiting.
+ """
+ return supervisor_join_timeout()+5
+
+
 class StateLockedError(RuntimeError):
  pass
 
@@ -423,17 +435,22 @@ class Service:
 
  def stop(self,jid,key):
   with self.controls:
-   result,created=self.store.control(jid,'stop',key,ACTIVE,data={})
-   if not created:return result
-   with self.lock:
-    item=self.procs.get(jid)
-    preparing=self.preparing.get(jid)
-    if not item and preparing:preparing.set()
-   if item:
-    proc,attempt,token,cmd,m=item;self.stopping.add(jid);self._stop_process(proc,cmd)
-   elif not preparing:raise RuntimeError('worker missing; restart service for reconciliation')
+   _,created=self.store.control(jid,'stop',key,ACTIVE,data={})
+   if created:
+    with self.lock:
+     item=self.procs.get(jid)
+     preparing=self.preparing.get(jid)
+     if not item and preparing:preparing.set()
+    if item:
+     proc,attempt,token,cmd,m=item;self.stopping.add(jid);self._stop_process(proc,cmd)
+    elif not preparing:raise RuntimeError('worker missing; restart service for reconciliation')
+   elif self.store.get(jid)['state'] not in ACTIVE:
+    return {'id':jid,'state':self.store.get(jid)['state']}
    # The watcher retains partial artifacts and owns the terminal transition.
-  deadline=time.monotonic()+20
+   # A repeated key waits for that transition. The snapshot stored when the
+   # stop was accepted is still the active state, so returning it would
+   # report success before the job has stopped.
+  deadline=time.monotonic()+stop_reconcile_timeout()
   while self.store.get(jid)['state'] in ACTIVE and time.monotonic()<deadline:time.sleep(.01)
   if self.store.get(jid)['state'] in ACTIVE:raise RuntimeError('worker stop reconciliation timed out')
   return {'id':jid,'state':self.store.get(jid)['state']}
