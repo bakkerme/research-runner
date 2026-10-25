@@ -204,6 +204,13 @@ intermediate publication leaves the preceding generation available. This is a
 per-file integrity snapshot, not an atomic semantic snapshot of a changing tree.
 Normal closeout is read only after the worker and owned execution have stopped.
 
+Oversized Codex telemetry is abbreviated before entering the bounded worker log
+stream. Events carry `runner_log.truncated` and their original serialized size;
+large tool output includes a truncation marker. If a payload still exceeds the
+limit, only event identity and lifecycle status are logged. This affects monitoring
+history only: the agent's tool results and files remain unchanged, and execution
+continues. Approval requests and other control messages are never abbreviated.
+
 Status/event activity reports liveness, not semantic progress. Worker checkpoints
 are claims; artifact hashes establish delivered bytes. Failed/interrupted runs
 attempt a final partial publication without inventing result files. Collection

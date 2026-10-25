@@ -13,6 +13,7 @@ import time
 import uuid
 
 from .files import read_file
+from .events import MAX_EVENT_CHARS
 from .package import MAX_FILE, MAX_FILES, MAX_TOTAL, declared, deploy, digest, relpath, read_manifest, hash_file, MAX_ARCHIVE
 from .protocol import Checkpoint, Result, is_mvp, load_contract, validate_research
 from .store import ACTIVE, Store
@@ -235,9 +236,9 @@ class Service:
   try:
    if is_mvp(m) and j['state']=='finalizing':self._signal_finalize(jid)
    while True:
-    line=proc.stdout.readline(1024*1024+1)
+    line=proc.stdout.readline(MAX_EVENT_CHARS+1)
     if not line:break
-    if len(line)>1024*1024:raise ValueError('worker event exceeds 1 MiB')
+    if len(line)>MAX_EVENT_CHARS:raise ValueError('worker event exceeds 1 MiB')
     try:v=json.loads(line)
     except json.JSONDecodeError:
      self.store.append(jid,attempt,token,'worker_text',{'line':line[:2000]});continue

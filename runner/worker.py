@@ -11,10 +11,11 @@ import time
 import uuid
 
 from .protocol import is_mvp
+from .events import encode_event
 
 
 def emit(kind,data):
- print(json.dumps({'kind':kind,'data':data},sort_keys=True,default=str),flush=True)
+ print(encode_event(kind,data),flush=True)
 
 
 def atomic(path,data):
