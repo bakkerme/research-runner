@@ -32,6 +32,16 @@ def cleanup_seconds():
  return value if value>0 else 20.0
 
 
+def supervisor_join_timeout():
+ """How long the watcher waits for the supervisor's cleanup.
+
+ _stop_process can block for the group wait, the group check, and docker rm.
+ Joining for less than that lets the watcher start a second cleanup, and two
+ docker rm calls on the same container can fail the run.
+ """
+ return cleanup_seconds()*3+30
+
+
 class StateLockedError(RuntimeError):
  pass
 
@@ -61,7 +71,7 @@ class Service:
   self.auth_file=pathlib.Path(auth).expanduser().resolve(strict=True) if auth else None
   if self.auth_file and (not self.auth_file.is_file() or ':' in str(self.auth_file)):
    raise ValueError('Codex auth projection must name a regular host file')
-  self.procs={};self.stopping=set();self.lock=threading.Lock();self.controls=threading.RLock()
+  self.procs={};self.stopping=set();self.lock=threading.Lock();self.controls=threading.RLock();self.cleanup_lock=threading.Lock()
   for marker in (self.root/'jobs').glob('*/assets/loader-runtime.json'):cleanup_orphan(marker)
   self._kill_orphans();self.store.reconcile()
   known={j['id'] for j in self.store.list()}
@@ -306,7 +316,7 @@ class Service:
      else:fatal_error[0]=message
     self._record(jid,attempt,token,kind,data)
    rc=proc.wait(timeout=max(.1,hard-time.monotonic()))
-   done.set();timer.join(timeout=15)
+   done.set();timer.join(timeout=supervisor_join_timeout())
    if forced.is_set():raise TimeoutError('deadline forced' if not supervisor_errors else '; '.join(supervisor_errors))
    if jid in self.stopping:raise InterruptedError('stopped by user')
    reason=fatal_error[0] or advisory[0]
@@ -315,7 +325,7 @@ class Service:
    self._stop_process(proc,cmd)
    self._publish(jid,m,attempt,token,final=True)
   except Exception as e:
-   done.set();timer.join(timeout=15)
+   done.set();timer.join(timeout=supervisor_join_timeout())
    cleanup_error=None
    try:self._stop_process(proc,cmd)
    except Exception as cleanup:cleanup_error=str(cleanup)
@@ -389,12 +399,14 @@ class Service:
   raise OSError('could not write request file')
 
  def _stop_process(self,proc,cmd):
-  # Kill the whole process group, including descendants after leader exit.
-  self._kill_group(proc.pid)
-  try:proc.wait(timeout=cleanup_seconds())
-  except subprocess.TimeoutExpired:pass # _verify_group below is authoritative
-  self._verify_group(proc.pid)
-  if self.engine=='docker':self._remove_container(cmd[cmd.index('--name')+1])
+  # One cleanup at a time. The watcher and the supervisor can both reach this
+  # after a deadline, and overlapping docker rm calls fail the job.
+  with self.cleanup_lock:
+   self._kill_group(proc.pid)
+   try:proc.wait(timeout=cleanup_seconds())
+   except subprocess.TimeoutExpired:pass # _verify_group below is authoritative
+   self._verify_group(proc.pid)
+   if self.engine=='docker':self._remove_container(cmd[cmd.index('--name')+1])
 
  def _signal_finalize(self,jid):
   j=self.store.get(jid);dest=self.path(jid)/'requests/finalize.json'

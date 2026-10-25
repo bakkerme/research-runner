@@ -1,11 +1,45 @@
 """Cleanup waits out a slow exit and does not fail solely because wait() timed out."""
 import os
 import subprocess
+import threading
 import time
 
 import pytest
 
-from runner.service import Service, cleanup_seconds
+from runner.service import Service, cleanup_seconds, supervisor_join_timeout
+
+
+def test_supervisor_join_covers_one_cleanup(monkeypatch):
+ monkeypatch.setenv('RESEARCH_RUNNER_CLEANUP_SECONDS', '20')
+ assert supervisor_join_timeout() >= 20 * 3
+
+
+def test_stop_process_calls_do_not_overlap(tmp_path, monkeypatch):
+ monkeypatch.setenv('RESEARCH_RUNNER_CLEANUP_SECONDS', '0.05')
+ service = Service(tmp_path / 'state')
+ try:
+  state = {'active': 0, 'max': 0}
+  gate = threading.Lock()
+  def verify(pid):
+   with gate:
+    state['active'] += 1
+    state['max'] = max(state['max'], state['active'])
+   time.sleep(.15)
+   with gate:
+    state['active'] -= 1
+  service._verify_group = verify
+  service._kill_group = lambda pid: None
+  class Proc:
+   pid = 1
+   def wait(self, timeout):
+    return 0
+  threads = [threading.Thread(target=service._stop_process, args=(Proc(), ['worker'])) for _ in range(2)]
+  for thread in threads: thread.start()
+  for thread in threads: thread.join(timeout=2)
+  assert state['max'] == 1
+  assert all(not thread.is_alive() for thread in threads)
+ finally:
+  service._owner.close()
 
 
 def test_cleanup_seconds_reads_the_environment(monkeypatch):
