@@ -5,6 +5,34 @@ MAX_EVENT_CHARS = 1024 * 1024
 OUTPUT_FIELDS = {'aggregated_output', 'aggregatedOutput', 'output', 'delta'}
 
 
+def approval_event_approvable(data):
+ """A stored approval may be accepted only when its details were not clipped.
+
+ The dashboard shows details. A truncated approval_request still carries the
+ id the worker is waiting on, and Accept would authorize the original command
+ or file change the operator did not see.
+ """
+ if not isinstance(data, dict) or not isinstance(data.get('id'), str) or not data['id']:
+  return False
+ if not isinstance(data.get('details'), (dict, list)):
+  return False
+ log = data.get('runner_log')
+ if isinstance(log, dict) and log.get('truncated'):
+  return False
+ return True
+
+
+def approval_should_wait(req):
+ """False when encoding this approval would hide details from the operator."""
+ if not isinstance(req, dict):
+  return False
+ try:
+  shown = json.loads(encode_event('approval_request', req)).get('data')
+ except (ValueError, TypeError):
+  return False
+ return approval_event_approvable(shown) and shown.get('details') == req.get('details')
+
+
 def encode_event(kind, data):
  def encode(value):
   return json.dumps({'kind': kind, 'data': value}, sort_keys=True, default=str)

@@ -11,7 +11,7 @@ import time
 import uuid
 
 from .protocol import is_mvp
-from .events import encode_event
+from .events import approval_should_wait, encode_event
 
 
 def emit(kind,data):
@@ -84,6 +84,9 @@ def main():
    if finalizing.is_set() or (requests/'finalize.json').exists():return {'decision':'decline'}
    rid=uuid.uuid4().hex
    req={'id':rid,'attempt':a.attempt,'turn_id':(params or {}).get('turnId') or current_turn['id'],'method':method,'details':params or {}}
+   if not approval_should_wait(req):
+    emit('progress',{'message':'approval declined; the request does not fit in one event','id':rid})
+    return {'decision':'decline'}
    emit('approval_request',req);response=requests/(rid+'.json')
    while not done.is_set():
     if (requests/'finalize.json').exists():return {'decision':'decline'}

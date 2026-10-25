@@ -127,6 +127,8 @@ class Store:
     self.event(c,j['id'],j['attempt'],'interrupted',{'reason':'service restart; process termination must be verified before resume'})
    c.execute('COMMIT')
  def request_approval(self,jid,attempt,token,data):
+  from .events import approval_event_approvable
+  if not approval_event_approvable(data):raise ValueError('truncated approval is not approvable')
   rid=data['id'];turn=data.get('turn_id') or ''
   with self.db() as c:
    c.execute('BEGIN IMMEDIATE');j=c.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()
