@@ -144,7 +144,7 @@ def is_mvp(manifest):
 def capabilities():
     from .package import INPUT_MAX_FILE, INPUT_MAX_TOTAL, MAX_ARCHIVE, MAX_FILE, MAX_TOTAL, MAX_FILES
     return {
-        'format': 'runner-capabilities/v1', 'version': '0.3.0',
+        'format': 'runner-capabilities/v1', 'version': '0.4.0',
         'package_formats': ['research-package/v1', 'research-package/v2'],
         'adapters': ['fixture', 'codex'], 'max_running_jobs': 1,
         'default_engine': 'host', 'execution_engines': ['host', 'docker'],

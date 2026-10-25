@@ -1,4 +1,4 @@
-# Research Runner 0.3.0
+# Research Runner 0.4.0
 
 A single-host runner for bounded agent jobs. **Codex runs on the host by default**,
 using the operator's normal login and session store. A payload supplies its brief,
@@ -51,7 +51,7 @@ or test dependencies needed):
 
 ```sh
 uv tool install --python 3.12 \
-  'research-runner[server] @ https://github.com/bakkerme/research-runner/releases/download/v0.3.0/research_runner-0.3.0-py3-none-any.whl'
+  'research-runner[server] @ https://github.com/bakkerme/research-runner/releases/download/v0.4.0/research_runner-0.4.0-py3-none-any.whl'
 uv tool update-shell
 # Open a new shell if uv added its executable directory to PATH.
 codex login status
@@ -65,7 +65,7 @@ use a successful CI artifact as described in the [quickstart](docs/agent-quickst
 verify its `SHA256SUMS`, and install the downloaded wheel instead:
 
 ```sh
-uv tool install --python 3.12 '/absolute/path/research_runner-0.3.0-py3-none-any.whl[server]'
+uv tool install --python 3.12 '/absolute/path/research_runner-0.4.0-py3-none-any.whl[server]'
 ```
 
 Keep state outside the installation so reinstalling Runner preserves jobs.

@@ -13,10 +13,10 @@ archive, a separate documentation ZIP (including schemas and the skill), and
 `SHA256SUMS`. All documentation and the skill are also inside the wheel.
 No PyPI publication or Runner source checkout is required.
 
-For v0.3.0, add this pinned dependency to the project's research requirements file:
+For v0.4.0, add this pinned dependency to the project's research requirements file:
 
 ```text
-research-runner @ https://github.com/bakkerme/research-runner/releases/download/v0.3.0/research_runner-0.3.0-py3-none-any.whl
+research-runner @ https://github.com/bakkerme/research-runner/releases/download/v0.4.0/research_runner-0.4.0-py3-none-any.whl
 ```
 
 Then install it into the project's normal Python 3.11+ environment:
@@ -35,7 +35,7 @@ for the intended branch/commit. Download its immutable run artifact without clon
 ```sh
 gh run view RUN_ID --repo bakkerme/research-runner
 gh run download RUN_ID --repo bakkerme/research-runner --pattern 'research-runner-*' --dir .research-runner/bootstrap
-python -m pip install .research-runner/bootstrap/research_runner-0.3.0-py3-none-any.whl
+python -m pip install .research-runner/bootstrap/research_runner-0.4.0-py3-none-any.whl
 ```
 
 GitHub CLI requires GitHub authentication for Actions artifact downloads, including
@@ -44,7 +44,7 @@ credentials. CI artifacts expire after the configured retention period; releases
 provide the persistent versioned download path. Do not install an arbitrary latest
 in-progress or failed build. Record the version, source commit/run, and wheel hash
 in the integration handoff. Release assets can also be downloaded using
-`gh release download v0.3.0 --repo bakkerme/research-runner --dir DIRECTORY`.
+`gh release download v0.4.0 --repo bakkerme/research-runner --dir DIRECTORY`.
 Verify downloaded assets against `SHA256SUMS` before installing when using a local
 artifact bundle. Checksums establish byte integrity, not independent provenance.
 
