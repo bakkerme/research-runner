@@ -435,14 +435,14 @@ class Service:
    return result
 
  def stop(self,jid,key):
-  item=None
+  item=None;signaled_prepare=False
   with self.controls:
    _,created=self.store.control(jid,'stop',key,ACTIVE,data={})
    if created:
     with self.lock:
      item=self.procs.get(jid)
      preparing=self.preparing.get(jid)
-     if not item and preparing:preparing.set()
+     if not item and preparing:preparing.set();signaled_prepare=True
     if item:self.stopping.add(jid)
     elif not preparing:raise RuntimeError('worker missing; restart service for reconciliation')
    elif self.store.get(jid)['state'] not in ACTIVE:
@@ -457,11 +457,12 @@ class Service:
   while self.store.get(jid)['state'] in ACTIVE and time.monotonic()<deadline:time.sleep(.01)
   state=self.store.get(jid)['state']
   if state not in ACTIVE:return {'id':jid,'state':state}
-  with self.lock:in_flight=jid in self.procs or jid in self.stopping
-  # The watcher records the terminal state after cleanup. Report the live
-  # state while that is still in progress. With no process left to finish
-  # the stop, the caller must see the timeout.
-  if item or in_flight:return {'id':jid,'state':state}
+  with self.lock:in_flight=jid in self.procs or jid in self.stopping or jid in self.preparing
+  # The watcher, or the loader unwind, records the terminal state after this
+  # returns. Report the live state while that is still in progress. With no
+  # process and no preparation left to finish the stop, the caller must see
+  # the timeout.
+  if item or in_flight or signaled_prepare:return {'id':jid,'state':state}
   raise RuntimeError('worker stop reconciliation timed out')
 
  def input(self,jid,text,key):

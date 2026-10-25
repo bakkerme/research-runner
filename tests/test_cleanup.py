@@ -114,6 +114,24 @@ def test_stop_returns_before_a_slow_cleanup_finishes(tmp_path, monkeypatch):
   service._owner.close()
 
 
+def test_stop_during_prepare_reports_the_live_state(tmp_path, monkeypatch):
+ monkeypatch.setattr('runner.service.stop_reconcile_timeout', lambda: .15)
+ service = Service(tmp_path / 'state')
+ try:
+  jid = '34' * 16
+  service.store.submit(jid, 'name', 'fixture', 'submit-key', '0' * 64)
+  service.store.start_attempt(jid)
+  cancel = threading.Event()
+  service.preparing[jid] = cancel
+  started = time.monotonic()
+  assert service.stop(jid, 'stop-key')['state'] == 'running'
+  assert time.monotonic() - started < 1
+  assert cancel.is_set()
+  assert service.stop(jid, 'stop-key')['state'] == 'running'
+ finally:
+  service._owner.close()
+
+
 def test_stop_process_calls_do_not_overlap(tmp_path, monkeypatch):
  monkeypatch.setenv('RESEARCH_RUNNER_CLEANUP_SECONDS', '0.05')
  service = Service(tmp_path / 'state')
