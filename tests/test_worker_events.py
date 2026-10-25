@@ -84,3 +84,73 @@ fixture(root, json.loads((root / 'package.json').read_text())['manifest'], Path(
  assert codex[0]['runner_log']['truncated'] is True
  assert codex[1]['method'] == 'turn/completed'
  assert service.download(jid, 'outputs/report.md')[0]
+
+
+@pytest.mark.parametrize('kind,data', [
+ ('approval_request', {'id': 'a', 'turn_id': 't', 'method': 'item/fileChange/requestApproval',
+                       'details': {'changes': [{'diff': 'x' * (MAX_EVENT_CHARS * 2)}]}}),
+ ('error', {'message': 'boom ' + 'y' * (MAX_EVENT_CHARS * 2), 'type': 'RuntimeError'}),
+ ('progress', {'message': '\U0001f600' * MAX_EVENT_CHARS}),
+])
+def test_non_codex_events_are_bounded(kind, data):
+ line = encode_event(kind, data)
+ assert len(line.encode()) + 1 <= MAX_EVENT_CHARS
+ event = json.loads(line)['data']
+ assert event['runner_log']['truncated'] is True
+ if 'id' in data:
+  assert event['id'] == data['id']
+ if kind == 'approval_request':
+  assert 'truncated' not in data['details']['changes'][0]['diff']
+
+
+def test_wide_nested_event_stays_bounded_and_keeps_identity():
+ # More than 1 MiB across many fields. The bounder must keep the approval
+ # identity and stop walking instead of copying every field.
+ data = {'id': 'approval', 'turn_id': 'turn', 'method': 'item/fileChange/requestApproval',
+         'details': {f'f{i}': 'q' * 20000 for i in range(80)}}
+ line = encode_event('approval_request', data)
+ assert len(line.encode()) + 1 <= MAX_EVENT_CHARS
+ event = json.loads(line)['data']
+ assert event['id'] == 'approval'
+ assert event['turn_id'] == 'turn'
+ assert event['method'] == 'item/fileChange/requestApproval'
+ assert event['runner_log']['truncated'] is True
+ assert len(event.get('details', {})) <= 32
+
+
+def test_controller_survives_oversized_and_malformed_lines(tmp_path, monkeypatch):
+ archive = tmp_path / 'job.rrpkg'
+ assemble(Path(__file__).resolve().parents[1] / 'sample', archive)
+ service = Service(tmp_path / 'state')
+ jid, _ = service.submit(archive, 'submit')
+ start_process = subprocess.Popen
+ script = '''
+import sys, json
+from pathlib import Path
+from runner.worker import fixture
+print('z' * (3 * 1024 * 1024), flush=True)
+print('q' * (1024 * 1024), flush=True)
+print(json.dumps({'kind': 'mystery', 'data': {}}), flush=True)
+print(json.dumps([1, 2]), flush=True)
+sys.stdout.buffer.write(bytes([255, 254]) + b' not-json\\n')
+sys.stdout.buffer.flush()
+root = Path(sys.argv[1]); (root / 'outputs').mkdir(exist_ok=True)
+fixture(root, json.loads((root / 'package.json').read_text())['manifest'], Path(sys.argv[2]))
+'''
+ def launch(cmd, **kwargs):
+  if 'runner.worker' not in cmd:
+   return start_process(cmd, **kwargs)
+  return start_process([sys.executable, '-c', script, str(service.path(jid) / 'work'),
+                        str(service.path(jid) / 'requests')], **kwargs)
+ monkeypatch.setattr('runner.service.subprocess.Popen', launch)
+ service.launch(jid, 'start')
+ deadline = time.monotonic() + 10
+ while time.monotonic() < deadline and (service.store.get(jid)['state'] == 'running' or jid in service.procs):
+  time.sleep(.02)
+ status = service.status(jid)
+ assert status['state'] == 'completed', status.get('error')
+ texts = [e['data'] for e in service.store.events(jid) if e['kind'] == 'worker_text']
+ sizes = [text['chars'] for text in texts if 'chars' in text]
+ assert sizes[0] > 3 * 1024 * 1024
+ assert MAX_EVENT_CHARS + 1 in sizes
+ assert any('\ufffd' in text.get('line', '') for text in texts)

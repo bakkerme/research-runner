@@ -192,7 +192,7 @@ class Service:
    for private in ('RESEARCH_RUNNER_READ_TOKEN','RESEARCH_RUNNER_CONTROL_TOKEN','RESEARCH_RUNNER_CODEX_AUTH_FILE'):
     env.pop(private,None)
    if self.engine=='docker':env.pop('OPENAI_API_KEY',None)
-   try:proc=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1,env=env,start_new_session=True)
+   try:proc=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,errors='replace',bufsize=1,env=env,start_new_session=True)
    except Exception as e:self.store.finish(jid,attempt,token,'failed',str(e));raise
    (p/'runtime.json').write_text(json.dumps({'pid':proc.pid,'attempt':attempt}))
    self.procs[jid]=(proc,attempt,token,cmd,m)
@@ -238,16 +238,22 @@ class Service:
    while True:
     line=proc.stdout.readline(MAX_EVENT_CHARS+1)
     if not line:break
-    if len(line)>MAX_EVENT_CHARS:raise ValueError('worker event exceeds 1 MiB')
+    if len(line)>MAX_EVENT_CHARS:
+     # Oversized telemetry is recorded and skipped; it never ends the run.
+     # readline stops at the cap, so a line that does not end here continues.
+     size=len(line)
+     while line and not line.endswith('\n'):
+      line=proc.stdout.readline(MAX_EVENT_CHARS+1);size+=len(line)
+     self.store.append(jid,attempt,token,'worker_text',{'line':'[oversized worker line discarded]','chars':size})
+     continue
     try:v=json.loads(line)
     except json.JSONDecodeError:
      self.store.append(jid,attempt,token,'worker_text',{'line':line[:2000]});continue
-    kind=v['kind'];data=v['data']
-    if not isinstance(data,dict):raise ValueError('invalid worker payload')
+    kind=v.get('kind') if isinstance(v,dict) else None;data=v.get('data') if isinstance(v,dict) else None
+    if not isinstance(data,dict) or kind not in ('approval_request','progress','codex','thread','turn','error','finalize_acknowledged'):
+     self.store.append(jid,attempt,token,'worker_text',{'line':line[:2000]});continue
     if kind=='approval_request':self.store.request_approval(jid,attempt,token,data)
-    elif kind in ('progress','codex','thread','turn','error','finalize_acknowledged'):
-     self.store.append(jid,attempt,token,kind,data)
-    else:raise ValueError('invalid worker event')
+    else:self.store.append(jid,attempt,token,kind,data)
    rc=proc.wait(timeout=max(.1,hard-time.monotonic()))
    done.set();timer.join(timeout=15)
    if forced.is_set():raise TimeoutError('deadline forced' if not supervisor_errors else '; '.join(supervisor_errors))
