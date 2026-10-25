@@ -43,15 +43,16 @@ def supervisor_join_timeout():
 
 
 def stop_reconcile_timeout():
- """How long stop() waits for the watcher to leave the active state.
+ """How long stop() blocks the caller after accepting the stop.
 
- The watcher joins the supervisor for supervisor_join_timeout before it
- records the terminal state. The previous wait was 20s against a 15s join,
- so this stays five seconds longer than the join. A shorter wait makes
- stop() raise while the job is still active, and repeating the same key
- then returns that active snapshot without waiting.
+ The official client aborts a control request after 30 seconds. Cleanup
+ itself can take the group wait, the group check, and docker rm, and the
+ watcher may join the supervisor for longer than that. Those run outside
+ this wait. A process that has already exited is still reported with its
+ terminal state. A cleanup that is still running returns the live state
+ instead of holding the request until the client gives up.
  """
- return supervisor_join_timeout()+5
+ return 10
 
 
 class StateLockedError(RuntimeError):
@@ -434,6 +435,7 @@ class Service:
    return result
 
  def stop(self,jid,key):
+  item=None
   with self.controls:
    _,created=self.store.control(jid,'stop',key,ACTIVE,data={})
    if created:
@@ -441,20 +443,26 @@ class Service:
      item=self.procs.get(jid)
      preparing=self.preparing.get(jid)
      if not item and preparing:preparing.set()
-    if item:
-     proc,attempt,token,cmd,m=item;self.stopping.add(jid);self._stop_process(proc,cmd)
+    if item:self.stopping.add(jid)
     elif not preparing:raise RuntimeError('worker missing; restart service for reconciliation')
    elif self.store.get(jid)['state'] not in ACTIVE:
     return {'id':jid,'state':self.store.get(jid)['state']}
-   # The watcher retains partial artifacts and owns the terminal transition.
-   # A repeated key for this same attempt waits for that transition. The
-   # snapshot stored when the stop was accepted is still the active state, so
-   # returning it would report success before the job has stopped. A later
-   # attempt is applied above instead of waiting here.
+   # A repeated key for this same attempt does not start a second cleanup.
+   # A later attempt is created above and stops that attempt's process.
+  # Cleanup can outlast the client's 30 second control timeout. Run it off
+  # this call, and do not hold the control lock across it, so a retry is not
+  # stuck behind docker rm. The cleanup lock still keeps the two calls apart.
+  if item:threading.Thread(target=self._stop_process,args=(item[0],item[3]),daemon=True).start()
   deadline=time.monotonic()+stop_reconcile_timeout()
   while self.store.get(jid)['state'] in ACTIVE and time.monotonic()<deadline:time.sleep(.01)
-  if self.store.get(jid)['state'] in ACTIVE:raise RuntimeError('worker stop reconciliation timed out')
-  return {'id':jid,'state':self.store.get(jid)['state']}
+  state=self.store.get(jid)['state']
+  if state not in ACTIVE:return {'id':jid,'state':state}
+  with self.lock:in_flight=jid in self.procs or jid in self.stopping
+  # The watcher records the terminal state after cleanup. Report the live
+  # state while that is still in progress. With no process left to finish
+  # the stop, the caller must see the timeout.
+  if item or in_flight:return {'id':jid,'state':state}
+  raise RuntimeError('worker stop reconciliation timed out')
 
  def input(self,jid,text,key):
   if not text or len(text)>65536:raise ValueError('input must contain 1..65536 characters')

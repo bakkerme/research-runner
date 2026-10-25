@@ -12,7 +12,9 @@ from runner.service import Service, cleanup_seconds, stop_reconcile_timeout, sup
 def test_supervisor_join_covers_one_cleanup(monkeypatch):
  monkeypatch.setenv('RESEARCH_RUNNER_CLEANUP_SECONDS', '20')
  assert supervisor_join_timeout() >= 20 * 3
- assert stop_reconcile_timeout() >= supervisor_join_timeout() + 5
+ # The official client aborts a control request after 30 seconds.
+ assert stop_reconcile_timeout() <= 20
+ assert stop_reconcile_timeout() < 30
 
 
 def test_repeated_stop_waits_for_the_terminal_state(tmp_path, monkeypatch):
@@ -76,6 +78,38 @@ def test_reused_stop_key_stops_the_resumed_attempt(tmp_path, monkeypatch):
   assert stopped['attempt'] == attempt2
   assert time.monotonic() - started < 0.5
   assert service.store.get(jid)['attempt'] == attempt2
+ finally:
+  service._owner.close()
+
+
+def test_stop_returns_before_a_slow_cleanup_finishes(tmp_path, monkeypatch):
+ monkeypatch.setattr('runner.service.stop_reconcile_timeout', lambda: .2)
+ service = Service(tmp_path / 'state')
+ try:
+  jid = '12' * 16
+  service.store.submit(jid, 'name', 'fixture', 'submit-key', '0' * 64)
+  attempt, token, _, _ = service.store.start_attempt(jid)
+  class Proc:
+   pid = 1
+   def wait(self, timeout=None):
+    return 0
+  service.procs[jid] = (Proc(), attempt, token, ['docker', 'run', '--name', 'rr-example'], {})
+  release = threading.Event()
+  entered = threading.Event()
+  def stop_process(proc, cmd):
+   entered.set()
+   assert service.controls.acquire(blocking=False) is True
+   service.controls.release()
+   release.wait(2)
+  service._stop_process = stop_process
+  started = time.monotonic()
+  assert service.stop(jid, 'stop-key')['state'] == 'running'
+  assert time.monotonic() - started < 1
+  assert entered.wait(1)
+  again = time.monotonic()
+  assert service.stop(jid, 'stop-key')['state'] == 'running'
+  assert time.monotonic() - again < 1
+  release.set()
  finally:
   service._owner.close()
 
