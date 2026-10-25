@@ -22,6 +22,27 @@ def atomic(path,data):
  tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(data));tmp.replace(path)
 
 
+def turn_followup(status, saw_completed, missing_closeout, retries_left, time_left, reserve=15):
+ """Return accept, retry, or fail after one Codex turn stream ends.
+
+ A stream that ends without turn/completed is not itself a failure. An
+ explicit non-completed status still fails once retries or the time reserve
+ run out, including non-MVP jobs and turns that already wrote closeout files.
+ Missing MVP closeout is retried, then left for the controller to reject.
+ """
+ failed=saw_completed and status!='completed'
+ if not failed and not missing_closeout:return 'accept'
+ if retries_left>0 and time_left>=reserve:return 'retry'
+ return 'fail' if failed else 'accept'
+
+
+def inbox_text(path):
+ try:text=json.loads(path.read_text())['input']
+ except (ValueError,KeyError,OSError,TypeError) as error:raise ValueError(str(error)) from error
+ if not isinstance(text,str):raise ValueError('input must be a string')
+ return text
+
+
 def fixture(root,m,requests):
  emit('progress',{'message':'Reading brief'})
  if not is_mvp(m):
@@ -100,33 +121,56 @@ def main():
   emit('thread',{'id':thread.id})
   initial=requests/'finalize.json'
   if initial.exists():prompt+='\nFinalize immediately: '+initial.read_text();finalizing.set()
-  turn=thread.turn(prompt,approval_mode=ApprovalMode.auto_review,sandbox=Sandbox.workspace_write)
-  current_turn['id']=turn.id;emit('turn',{'id':turn.id})
+  holder={}
+  def start_turn(text):
+   t=thread.turn(text,approval_mode=ApprovalMode.auto_review,sandbox=Sandbox.workspace_write)
+   holder['turn']=t;current_turn['id']=t.id;emit('turn',{'id':t.id});return t
+  start_turn(prompt)
   def controls():
+   reported=set()
    while not done.wait(.1):
     try:
      request=requests/'finalize.json'
      if request.exists() and not finalizing.is_set():
       control=json.loads(request.read_text())
-      turn.steer('RUNNER FINALIZE: Stop substantive work now. Preserve partial outputs, record unresolved items, and write result.json/handoff.md before termination. Reason: '+control['reason'])
+      holder['turn'].steer('RUNNER FINALIZE: Stop substantive work now. Preserve partial outputs, record unresolved items, and write result.json/handoff.md before termination. Reason: '+control['reason'])
       finalizing.set();emit('finalize_acknowledged',control)
      if finalizing.is_set():continue
      for f in sorted(pathlib.Path(a.input_dir).glob('*.json')):
-      text=json.loads(f.read_text())['input'];turn.steer(text);f.unlink()
+      try:text=inbox_text(f)
+      except ValueError as bad:
+       emit('error',{'message':'discarding unreadable input '+f.name+': '+str(bad)});f.unlink(missing_ok=True);continue
+      holder['turn'].steer(text);f.unlink()
       emit('progress',{'message':'User input sent to active turn'})
     except Exception as e:
-     emit('error',{'message':'control delivery failed: '+str(e)})
-     # Failed delivery is not acknowledged or claimed as graceful shutdown.
-     return
+     # Transient steer failures (turn boundary, SDK hiccup) are retried next tick.
+     message='control delivery failed: '+str(e)
+     if message not in reported:reported.add(message);emit('error',{'message':message})
   control_thread=threading.Thread(target=controls,daemon=True);control_thread.start()
+  retries=int(os.environ.get('RESEARCH_RUNNER_TURN_RETRIES','2'))
+  def closeout_missing():
+   return is_mvp(m) and not ((root/'outputs/result.json').exists() and (root/'outputs/handoff.md').exists())
   try:
-   for event in turn.stream():
-    data=event.payload.model_dump(mode='json',exclude_none=True) if hasattr(event.payload,'model_dump') else getattr(event.payload,'params',{})
-    emit('codex',{'method':event.method,'payload':data})
-    if event.method=='turn/completed' and data.get('turn',{}).get('status')!='completed':
-     raise RuntimeError('Codex turn ended: '+str(data.get('turn',{}).get('status')))
+   while True:
+    status=None;saw=False
+    for event in holder['turn'].stream():
+     data=event.payload.model_dump(mode='json',exclude_none=True) if hasattr(event.payload,'model_dump') else getattr(event.payload,'params',{})
+     emit('codex',{'method':event.method,'payload':data})
+     if event.method=='turn/completed':
+      saw=True;turn=data.get('turn') if isinstance(data,dict) else None
+      status=turn.get('status') if isinstance(turn,dict) else None
+    missing=closeout_missing()
+    time_left=(a.deadline-time.time()) if a.deadline else 1e9
+    action=turn_followup(status,saw,missing,retries,time_left)
+    if action=='accept':break
+    if action=='fail':raise RuntimeError('Codex turn ended: '+str(status))
+    retries-=1
+    failed=saw and status!='completed'
+    emit('progress',{'message':'Continuing after turn status '+str(status)+('; closeout missing' if missing else '')})
+    start_turn(('RUNNER: the previous turn ended with status '+str(status)+'. ' if failed else 'RUNNER: ')+
+               ('Write outputs/result.json and outputs/handoff.md now.' if finalizing.is_set() or (requests/'finalize.json').exists()
+                else 'Continue the brief; result.json/handoff.md closeout is still required.'))
   finally:done.set()
-
 
 if __name__=='__main__':
  try:main()
