@@ -62,6 +62,14 @@ def test_followup_prompt_matches_package_contract():
  assert 'result.json' not in plain and 'handoff.md' not in plain
 
 
+def test_retry_clock_starts_before_codex_setup():
+ import inspect
+ from runner.worker import main
+ source = inspect.getsource(main)
+ assert source.index('started_at=time.time()') < source.index('from openai_codex import Codex')
+ assert source.index('started_at=time.time()') < source.index('start_turn(prompt)')
+
+
 def test_attempt_time_left_uses_manifest_budget_without_deadline():
  assert attempt_time_left(None, 30, now=100, started=80) == 10
  assert attempt_time_left(250, 30, now=100, started=80) == 150

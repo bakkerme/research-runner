@@ -42,7 +42,7 @@ def attempt_time_left(deadline, time_seconds, now, started):
 
  Non-MVP workers are not passed --deadline. Their budget is the manifest
  time limit measured from process start, which is when the controller's
- hard stop begins.
+ hard stop begins. started is that process start, not the first turn.
  """
  end=deadline if deadline else started+float(time_seconds)
  return end-now
@@ -98,6 +98,11 @@ def fixture(root,m,requests):
 
 
 def main():
+ # Non-MVP retries measure the manifest budget from process start, which is
+ # when the controller's hard stop begins. Codex setup and the first turn
+ # spend that budget; stamping the clock after them can start a retry inside
+ # the 15 second reserve.
+ started_at=time.time()
  p=argparse.ArgumentParser()
  for name in ('work','session'):p.add_argument('--'+name,required=True)
  for name in ('thread','input','request-dir','input-dir'):p.add_argument('--'+name)
@@ -174,7 +179,6 @@ def main():
      if message not in reported:reported.add(message);emit('error',{'message':message,'fatal':False})
   control_thread=threading.Thread(target=controls,daemon=True);control_thread.start()
   retries=int(os.environ.get('RESEARCH_RUNNER_TURN_RETRIES','2'))
-  started_at=time.time()
   def closeout_missing():
    return is_mvp(m) and not ((root/'outputs/result.json').exists() and (root/'outputs/handoff.md').exists())
   try:
