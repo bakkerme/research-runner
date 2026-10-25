@@ -96,11 +96,18 @@ def test_quota_and_unsafe_staged_files(tmp_path, asset):
         inventory(source)
 
 
-@pytest.mark.parametrize('destination', ['/tmp/escape', '../escape', 'outputs/private', 'inputs', 'AGENTS.md', 'package.json', 'manifest.json'])
+@pytest.mark.parametrize('destination', ['/tmp/escape', '../escape', 'outputs/private', 'inputs', 'AGENTS.md', 'package.json', 'manifest.json', '.runner', '.runner/cache'])
 def test_manifest_rejects_dependency_collisions(destination):
     manifest = json.loads((ROOT / 'sample-mvp/manifest.json').read_text())
     manifest['dependencies'] = [{'asset_type': 'local-files', 'asset_id': 'model', 'destination': destination}]
     with pytest.raises(ValueError):
+        validate_manifest(manifest)
+
+
+def test_manifest_rejects_packaged_runner_receipt_path():
+    manifest = json.loads((ROOT / 'sample-mvp/manifest.json').read_text())
+    manifest['inputs'].append('.runner/dependencies.json')
+    with pytest.raises(ValueError, match='reserved'):
         validate_manifest(manifest)
 
 
