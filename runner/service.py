@@ -152,12 +152,40 @@ class Service:
     return result
    return self._launch_worker(jid,m,attempt,token,input_text,result,docker_user)
 
+ def _expose_dependency_receipt(self,jid):
+  source=self.path(jid)/'assets'/'receipt.json'
+  if not source.is_file() or source.is_symlink():raise ValueError('dependency receipt missing')
+  work=self.path(jid)/'work'
+  if work.is_symlink():raise ValueError('workspace link blocks dependency receipt')
+  view=work/'.runner'
+  if view.is_symlink():raise ValueError('workspace link blocks dependency receipt')
+  view.mkdir(exist_ok=True)
+  dest=view/'dependencies.json'
+  if dest.is_symlink():dest.unlink()
+  tmp=view/('.dependencies-'+uuid.uuid4().hex+'.tmp')
+  try:
+   tmp.write_bytes(source.read_bytes());tmp.chmod(0o444);tmp.replace(dest)
+  finally:
+   if tmp.exists():tmp.unlink(missing_ok=True)
+  dest.chmod(0o444)
+
+ def _dependency_receipt_mount(self,work):
+  view=work/'.runner'
+  if not view.is_dir() or view.is_symlink():return []
+  resolved=view.resolve()
+  if not resolved.is_relative_to(work.resolve()):return []
+  return ['-v',str(resolved)+':/job/.runner:ro']
+
  def _prepare_launch(self,jid,m,attempt,token,input_text,result,cancel,docker_user):
   from .assets import prepare
   try:
    prepare(self.path(jid),m['dependencies'],self.loaders,
            progress=lambda data:self.store.append(jid,attempt,token,'asset_progress',data),
            cancel=cancel,deadline=self.store.get(jid)['terminate_at'])
+   # Expose a read-only copy of the controller-owned receipt inside the workspace,
+   # so research can verify dependency identity (assets/ is outside the worker cwd
+   # and not mounted in Docker).
+   self._expose_dependency_receipt(jid)
    with self.lock:
     if cancel.is_set():raise InterruptedError('asset preparation stopped by user')
     self._launch_worker(jid,m,attempt,token,input_text,result,docker_user)
@@ -175,6 +203,7 @@ class Service:
     if is_mvp(m):
      for f in declared(m)+['package.json']:
       cmd+=['-v',str((p/'work'/f).resolve())+':/job/'+f+':ro']
+    cmd+=self._dependency_receipt_mount(p/'work')
     for dependency in m.get('dependencies',[]):
      name=dependency['destination'];cmd+=['-v',str((p/'work'/name).resolve())+':/job/'+name+':ro']
     if m['adapter']=='codex' and self.auth_file:
