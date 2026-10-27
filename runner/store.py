@@ -48,19 +48,27 @@ class Store:
   with self.db() as c:
    c.execute('BEGIN IMMEDIATE');scope=f'{jid}:{action}'
    old=c.execute('SELECT result FROM keys WHERE key=? AND scope=?',(key,scope)).fetchone()
-   if old:
-    prev=json.loads(old['result'])
-    if prev.get('data_hash')!=hashlib.sha256(json.dumps(data or {},sort_keys=True).encode()).hexdigest():raise ValueError('idempotency key reused with different data')
-    c.execute('COMMIT');return prev,False
+   data_hash=hashlib.sha256(json.dumps(data or {},sort_keys=True).encode()).hexdigest()
+   prev=json.loads(old['result']) if old else None
+   if prev and prev.get('data_hash')!=data_hash:raise ValueError('idempotency key reused with different data')
    j=c.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()
    if not j:raise KeyError(jid)
+   # A stop key applies once per attempt. Repo mode persists that key, so a
+   # later resume must be able to stop again with it. Replaying it onto the
+   # new attempt would wait for a transition nobody is going to record.
+   same_attempt=bool(prev) and prev.get('attempt')==j['attempt']
+   if prev and (action!='stop' or same_attempt or j['state'] not in allowed):
+    c.execute('COMMIT');return prev,False
    if j['state'] not in allowed:raise ValueError(f'{action} invalid in {j["state"]}')
    if new_state:c.execute('UPDATE jobs SET state=?,updated=? WHERE id=?',(new_state,time.time(),jid))
    if action=='finalize':
     c.execute('UPDATE jobs SET finalize_reason=COALESCE(finalize_reason,?) WHERE id=?',((data or {})['reason'],jid))
     c.execute("UPDATE approvals SET state='expired' WHERE job_id=? AND state='pending'",(jid,))
-   result={'id':jid,'state':new_state or j['state'],'attempt':j['attempt'],'data_hash':hashlib.sha256(json.dumps(data or {},sort_keys=True).encode()).hexdigest()}
-   self.event(c,jid,j['attempt'],action,data or {});c.execute('INSERT INTO keys VALUES(?,?,?)',(key,scope,json.dumps(result)));c.execute('COMMIT');return result,True
+   result={'id':jid,'state':new_state or j['state'],'attempt':j['attempt'],'data_hash':data_hash}
+   self.event(c,jid,j['attempt'],action,data or {})
+   if old:c.execute('UPDATE keys SET result=? WHERE key=? AND scope=?',(json.dumps(result),key,scope))
+   else:c.execute('INSERT INTO keys VALUES(?,?,?)',(key,scope,json.dumps(result)))
+   c.execute('COMMIT');return result,True
  def start_attempt(self,jid,key=None,input_text=None,budget=None,policy=None,engine=None):
   with self.db() as c:
    c.execute('BEGIN IMMEDIATE')

@@ -19,6 +19,42 @@ from .protocol import Checkpoint, Result, is_mvp, load_contract, validate_resear
 from .store import ACTIVE, Store
 
 
+def cleanup_seconds():
+ """How long to wait for a killed worker group to disappear.
+
+ Emulators and GPU processes can sit in uninterruptible sleep for several
+ seconds after SIGKILL; a 2s/5s wait turned successful runs into
+ 'cleanup unconfirmed'. Read on use so RESEARCH_RUNNER_CLEANUP_SECONDS can
+ change without reimporting. Invalid values keep the 20 second default.
+ """
+ try:value=float(os.environ.get('RESEARCH_RUNNER_CLEANUP_SECONDS','20'))
+ except ValueError:return 20.0
+ return value if value>0 else 20.0
+
+
+def supervisor_join_timeout():
+ """How long the watcher waits for the supervisor's cleanup.
+
+ _stop_process can block for the group wait, the group check, and docker rm.
+ Joining for less than that lets the watcher start a second cleanup, and two
+ docker rm calls on the same container can fail the run.
+ """
+ return cleanup_seconds()*3+30
+
+
+def stop_reconcile_timeout():
+ """How long stop() blocks the caller after accepting the stop.
+
+ The official client aborts a control request after 30 seconds. Cleanup
+ itself can take the group wait, the group check, and docker rm, and the
+ watcher may join the supervisor for longer than that. Those run outside
+ this wait. A process that has already exited is still reported with its
+ terminal state. A cleanup that is still running returns the live state
+ instead of holding the request until the client gives up.
+ """
+ return 10
+
+
 class StateLockedError(RuntimeError):
  pass
 
@@ -48,7 +84,7 @@ class Service:
   self.auth_file=pathlib.Path(auth).expanduser().resolve(strict=True) if auth else None
   if self.auth_file and (not self.auth_file.is_file() or ':' in str(self.auth_file)):
    raise ValueError('Codex auth projection must name a regular host file')
-  self.procs={};self.stopping=set();self.lock=threading.Lock();self.controls=threading.RLock()
+  self.procs={};self.stopping=set();self.lock=threading.Lock();self.controls=threading.RLock();self.cleanup_lock=threading.Lock()
   for marker in (self.root/'jobs').glob('*/assets/loader-runtime.json'):cleanup_orphan(marker)
   self._kill_orphans();self.store.reconcile()
   known={j['id'] for j in self.store.list()}
@@ -85,18 +121,18 @@ class Service:
   except ProcessLookupError:pass
 
  def _verify_group(self,pid):
-  deadline=time.monotonic()+2
+  deadline=time.monotonic()+cleanup_seconds()
   while True:
-   probe=subprocess.run(['ps','-axo','pgid=,stat='],capture_output=True,text=True,timeout=2)
+   probe=subprocess.run(['ps','-axo','pgid=,stat='],capture_output=True,text=True,timeout=10)
    if probe.returncode:raise RuntimeError('cannot verify owned process cleanup')
    alive=any(parts[0]==str(pid) and not parts[1].startswith('Z')
              for line in probe.stdout.splitlines() if len(parts:=line.split())>=2)
    if not alive:return
    if time.monotonic()>=deadline:raise RuntimeError('owned process group survived termination')
-   time.sleep(.025)
+   time.sleep(.1)
 
  def _remove_container(self,name):
-  result=subprocess.run(['docker','rm','-f',name],capture_output=True,text=True,timeout=10)
+  result=subprocess.run(['docker','rm','-f',name],capture_output=True,text=True,timeout=max(30,cleanup_seconds()))
   inspect=subprocess.run(['docker','inspect',name],capture_output=True,text=True,timeout=10)
   if inspect.returncode==0 or (result.returncode and 'No such' not in result.stderr):
    raise RuntimeError('container cleanup unconfirmed: '+name)
@@ -293,7 +329,7 @@ class Service:
      else:fatal_error[0]=message
     self._record(jid,attempt,token,kind,data)
    rc=proc.wait(timeout=max(.1,hard-time.monotonic()))
-   done.set();timer.join(timeout=15)
+   done.set();timer.join(timeout=supervisor_join_timeout())
    if forced.is_set():raise TimeoutError('deadline forced' if not supervisor_errors else '; '.join(supervisor_errors))
    if jid in self.stopping:raise InterruptedError('stopped by user')
    reason=fatal_error[0] or advisory[0]
@@ -302,7 +338,7 @@ class Service:
    self._stop_process(proc,cmd)
    self._publish(jid,m,attempt,token,final=True)
   except Exception as e:
-   done.set();timer.join(timeout=15)
+   done.set();timer.join(timeout=supervisor_join_timeout())
    cleanup_error=None
    try:self._stop_process(proc,cmd)
    except Exception as cleanup:cleanup_error=str(cleanup)
@@ -376,11 +412,14 @@ class Service:
   raise OSError('could not write request file')
 
  def _stop_process(self,proc,cmd):
-  # Kill the whole process group, including descendants after leader exit.
-  self._kill_group(proc.pid)
-  proc.wait(timeout=5)
-  self._verify_group(proc.pid)
-  if self.engine=='docker':self._remove_container(cmd[cmd.index('--name')+1])
+  # One cleanup at a time. The watcher and the supervisor can both reach this
+  # after a deadline, and overlapping docker rm calls fail the job.
+  with self.cleanup_lock:
+   self._kill_group(proc.pid)
+   try:proc.wait(timeout=cleanup_seconds())
+   except subprocess.TimeoutExpired:pass # _verify_group below is authoritative
+   self._verify_group(proc.pid)
+   if self.engine=='docker':self._remove_container(cmd[cmd.index('--name')+1])
 
  def _signal_finalize(self,jid):
   j=self.store.get(jid);dest=self.path(jid)/'requests/finalize.json'
@@ -396,21 +435,35 @@ class Service:
    return result
 
  def stop(self,jid,key):
+  item=None;signaled_prepare=False
   with self.controls:
-   result,created=self.store.control(jid,'stop',key,ACTIVE,data={})
-   if not created:return result
-   with self.lock:
-    item=self.procs.get(jid)
-    preparing=self.preparing.get(jid)
-    if not item and preparing:preparing.set()
-   if item:
-    proc,attempt,token,cmd,m=item;self.stopping.add(jid);self._stop_process(proc,cmd)
-   elif not preparing:raise RuntimeError('worker missing; restart service for reconciliation')
-   # The watcher retains partial artifacts and owns the terminal transition.
-  deadline=time.monotonic()+20
+   _,created=self.store.control(jid,'stop',key,ACTIVE,data={})
+   if created:
+    with self.lock:
+     item=self.procs.get(jid)
+     preparing=self.preparing.get(jid)
+     if not item and preparing:preparing.set();signaled_prepare=True
+    if item:self.stopping.add(jid)
+    elif not preparing:raise RuntimeError('worker missing; restart service for reconciliation')
+   elif self.store.get(jid)['state'] not in ACTIVE:
+    return {'id':jid,'state':self.store.get(jid)['state']}
+   # A repeated key for this same attempt does not start a second cleanup.
+   # A later attempt is created above and stops that attempt's process.
+  # Cleanup can outlast the client's 30 second control timeout. Run it off
+  # this call, and do not hold the control lock across it, so a retry is not
+  # stuck behind docker rm. The cleanup lock still keeps the two calls apart.
+  if item:threading.Thread(target=self._stop_process,args=(item[0],item[3]),daemon=True).start()
+  deadline=time.monotonic()+stop_reconcile_timeout()
   while self.store.get(jid)['state'] in ACTIVE and time.monotonic()<deadline:time.sleep(.01)
-  if self.store.get(jid)['state'] in ACTIVE:raise RuntimeError('worker stop reconciliation timed out')
-  return {'id':jid,'state':self.store.get(jid)['state']}
+  state=self.store.get(jid)['state']
+  if state not in ACTIVE:return {'id':jid,'state':state}
+  with self.lock:in_flight=jid in self.procs or jid in self.stopping or jid in self.preparing
+  # The watcher, or the loader unwind, records the terminal state after this
+  # returns. Report the live state while that is still in progress. With no
+  # process and no preparation left to finish the stop, the caller must see
+  # the timeout.
+  if item or in_flight or signaled_prepare:return {'id':jid,'state':state}
+  raise RuntimeError('worker stop reconciliation timed out')
 
  def input(self,jid,text,key):
   if not text or len(text)>65536:raise ValueError('input must contain 1..65536 characters')
