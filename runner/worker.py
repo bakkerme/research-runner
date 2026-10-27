@@ -69,6 +69,14 @@ def inbox_text(path):
  return text
 
 
+def dependency_receipt_note(root):
+ """Tell the agent where the controller receipt is, when it is a regular file."""
+ view=root/'.runner';path=view/'dependencies.json'
+ if view.is_symlink() or path.is_symlink() or not path.is_file():return ''
+ return ('\nRunner dependency receipt (controller-verified sizes/SHA-256 of prepared inputs, read-only): '
+         +str(path)+'. It is published as outputs/dependencies.json; do not write that name.\n')
+
+
 def fixture(root,m,requests):
  emit('progress',{'message':'Reading brief'})
  if not is_mvp(m):
@@ -124,6 +132,7 @@ def main():
  if is_mvp(m):
   prompt+='''\nRunner MVP contract: Follow the brief within the allotted scope. You may finish early when complete or when no allowed actionable path remains. Do not repeat unchanged failures to fill time. Preserve useful partial outputs and explain blockers. Atomically replace outputs/checkpoint.json after meaningful results with {"format":"runner-checkpoint/v1","summary":"...","next_action":"...","blockers":[]}. Before ending, write outputs/handoff.md and atomically replace outputs/result.json with {"format":"runner-result/v1","outcome":"complete|partial|blocked","reason":"scope_complete|budget_exhausted|no_actionable_work|user_requested","summary":"...","next_action":"...","blockers":[]}. Complete requires scope_complete and all required outputs; blocked requires no_actionable_work and nonempty blockers. A runner finalize message requires stopping new substantive work and wrapping up partial outputs. Bound each tool invocation to fit the remaining time; use only bounded owned operations. Dependency containers must be managed by workload tooling with explicit ownership, deadlines and cleanup; never leave untracked detached or remote work. Check /requests/finalize.json between operations. Domain conclusions remain your claims, not runner-validated facts.\n'''
   prompt+=f'Absolute hard deadline (Unix UTC seconds): {a.deadline}. Finalization reserve: {m["policy"]["finalization_seconds"]} seconds. Termination begins {m["policy"]["termination_seconds"]} seconds before that deadline.\n'
+ prompt+=dependency_receipt_note(root)
  prompt=prompt.replace('/requests/finalize.json',str(requests/'finalize.json'))
  done=threading.Event();finalizing=threading.Event()
  # Native execution uses the operator's installed Codex and normal credential /

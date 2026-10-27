@@ -13,6 +13,7 @@ import pytest
 from runner.assets import PROTOCOL, inventory, invoke, prepare, read_config, validate_loaders
 from runner.package import assemble, validate_manifest
 from runner.service import Service
+from runner.worker import dependency_receipt_note
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -95,11 +96,18 @@ def test_quota_and_unsafe_staged_files(tmp_path, asset):
         inventory(source)
 
 
-@pytest.mark.parametrize('destination', ['/tmp/escape', '../escape', 'outputs/private', 'inputs', 'AGENTS.md', 'package.json', 'manifest.json'])
+@pytest.mark.parametrize('destination', ['/tmp/escape', '../escape', 'outputs/private', 'inputs', 'AGENTS.md', 'package.json', 'manifest.json', '.runner', '.runner/cache'])
 def test_manifest_rejects_dependency_collisions(destination):
     manifest = json.loads((ROOT / 'sample-mvp/manifest.json').read_text())
     manifest['dependencies'] = [{'asset_type': 'local-files', 'asset_id': 'model', 'destination': destination}]
     with pytest.raises(ValueError):
+        validate_manifest(manifest)
+
+
+def test_manifest_rejects_packaged_runner_receipt_path():
+    manifest = json.loads((ROOT / 'sample-mvp/manifest.json').read_text())
+    manifest['inputs'].append('.runner/dependencies.json')
+    with pytest.raises(ValueError, match='reserved'):
         validate_manifest(manifest)
 
 
@@ -177,8 +185,74 @@ def test_service_prepares_on_start_and_publishes_authoritative_receipt(tmp_path,
         assert any(event['kind'] == 'asset_progress' and 'bytes_completed' in event['data'] for event in events)
         data, _ = service.download(jid, 'outputs/dependencies.json')
         assert json.loads(data)['assets'][0]['resolved_id'] == 'revision-1'
+        visible = service.path(jid) / 'work/.runner/dependencies.json'
+        assert json.loads(visible.read_text()) == json.loads(data)
+        assert visible.stat().st_mode & 0o777 == 0o444
+        assert not visible.is_symlink()
     finally:
         service._owner.close()
+
+
+def test_receipt_copy_replaces_read_only_file_and_refuses_links(tmp_path):
+    archive = tmp_path / 'job.rrpkg'
+    assemble(ROOT / 'sample-mvp', archive)
+    service = Service(tmp_path / 'state')
+    try:
+        jid, _ = service.submit(archive, 'submit')
+        assets = service.path(jid) / 'assets'
+        assets.mkdir()
+        receipt = {'format': 'runner-assets-receipt/v1', 'assets': []}
+        (assets / 'receipt.json').write_text(json.dumps(receipt))
+        service._expose_dependency_receipt(jid)
+        service._expose_dependency_receipt(jid)
+        visible = service.path(jid) / 'work' / '.runner' / 'dependencies.json'
+        assert json.loads(visible.read_text()) == receipt
+        assert visible.stat().st_mode & 0o777 == 0o444
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        visible.unlink()
+        view = visible.parent
+        view.rmdir()
+        view.symlink_to(outside)
+        with pytest.raises(ValueError, match='link'):
+            service._expose_dependency_receipt(jid)
+        assert not (outside / 'dependencies.json').exists()
+    finally:
+        service._owner.close()
+
+
+def test_docker_receipt_mount_skips_symlinks(tmp_path):
+    service = Service(tmp_path / 'state')
+    try:
+        work = tmp_path / 'work'
+        view = work / '.runner'
+        view.mkdir(parents=True)
+        assert service._dependency_receipt_mount(work) == ['-v', str(view.resolve()) + ':/job/.runner:ro']
+        view.rmdir()
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        view.symlink_to(outside)
+        assert service._dependency_receipt_mount(work) == []
+    finally:
+        service._owner.close()
+
+
+def test_dependency_receipt_note_names_regular_file_only(tmp_path):
+    root = tmp_path / 'work'
+    view = root / '.runner'
+    view.mkdir(parents=True)
+    path = view / 'dependencies.json'
+    path.write_text('{}')
+    note = dependency_receipt_note(root)
+    assert str(path) in note and 'outputs/dependencies.json' in note and 'read-only' in note
+    path.unlink()
+    assert dependency_receipt_note(root) == ''
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'dependencies.json').write_text('{}')
+    view.rmdir()
+    view.symlink_to(outside)
+    assert dependency_receipt_note(root) == ''
 
 
 def test_service_stop_during_loader_and_unknown_type(tmp_path, asset):

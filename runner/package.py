@@ -63,12 +63,12 @@ def validate_manifest(m):
         for v in m[k]: relpath(v)
     if len(set([m['brief'],m['agents']]+m['skills']+m['inputs']+m['required_outputs'])) != 2+len(m['skills'])+len(m['inputs'])+len(m['required_outputs']): raise ValueError('duplicate paths')
     if any(not p.startswith('outputs/') for p in m['required_outputs']): raise ValueError('required outputs must be outputs/')
-    if any(p.startswith('outputs/') or p == 'package.json' for p in declared(m)): raise ValueError('reserved input path')
+    if any(p.startswith('outputs/') or p=='package.json' or p=='.runner' or p.startswith('.runner/') for p in declared(m)): raise ValueError('reserved input path')
     if 'dependencies' in m:
         from .protocol import AssetDependency
         if not isinstance(m['dependencies'], list) or len(m['dependencies']) > 100:
             raise ValueError('dependencies must be a list of at most 100 assets')
-        occupied = declared(m) + ['package.json', 'manifest.json', 'outputs']
+        occupied = declared(m) + ['package.json', 'manifest.json', 'outputs', '.runner']
         for dependency in m['dependencies']:
             asset = AssetDependency.model_validate(dependency)
             dest = relpath(asset.destination)
