@@ -136,6 +136,9 @@ def _validate_image(image, declared):
             raise ValueError('tool image input must be inside context: ' + rel)
         if rel not in declared:
             raise ValueError('tool image input is not a package input: ' + rel)
+    for path in declared:
+        if _inside(path, context) and path not in inputs:
+            raise ValueError('tool image context file is not pinned: ' + path)
     if containerfile not in inputs:
         raise ValueError('tool image containerfile must be a pinned input')
     timeout = image['timeout_seconds']
@@ -381,6 +384,29 @@ def _resolve_url(work, entry):
     return data[key]
 
 
+def _assert_context_pinned(work, spec):
+    """Every file copied into the build must be covered by input_hash.
+
+    The tag ignores files that are not in the pinned inputs map. Copying them
+    would let a later job reuse an image built from different bytes.
+    """
+    source = Path(work) / spec['context']
+    root = Path(work).resolve()
+    if source.is_symlink() or not source.is_dir() or not source.resolve().is_relative_to(root):
+        raise ToolImageError('tool image context is not a directory')
+    pinned = {str(PurePosixPath(path).relative_to(spec['context'])) for path in spec['inputs']}
+    for current, dirs, files in os.walk(source, followlinks=False):
+        relative = Path(current).relative_to(source).as_posix()
+        for name in dirs + files:
+            path = Path(current) / name
+            if path.is_symlink() or not (path.is_dir() or path.is_file()):
+                raise ToolImageError('tool image context contains a link or special file')
+        for name in files:
+            rel = name if relative == '.' else relative + '/' + name
+            if rel not in pinned:
+                raise ToolImageError('unpinned context file ' + spec['context'] + '/' + rel)
+
+
 def _copy_context(work, context, dest):
     source = Path(work) / context
     root = Path(work).resolve()
@@ -511,6 +537,7 @@ def _provision_one(job, spec, progress, cancel, docker):
     digest = input_hash(spec)
     if cancel is not None and cancel.is_set():
         raise InterruptedError('tool image preparation stopped by user')
+    _assert_context_pinned(Path(job) / 'work', spec)
     current = _inspect(docker, spec['tag'])
     if current is not None and _label(current) == digest:
         record = _record(name, spec, current, 'reused', time.monotonic() - started)

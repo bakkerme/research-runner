@@ -366,6 +366,32 @@ def test_v3_without_tool_images_and_v1_v2_do_not_need_docker(tmp_path, monkeypat
         verify(packed)
 
 
+def test_unpinned_context_file_cannot_share_an_image_identity(tmp_path, monkeypatch):
+    source, manifest = write_payload(tmp_path / 'decl')
+    (source / 'tools' / 'demo' / 'extra.txt').write_text('not pinned\n', encoding='utf-8')
+    manifest['inputs'].append('tools/demo/extra.txt')
+    (source / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+    with pytest.raises(ValueError, match='not pinned'):
+        validate_manifest(manifest)
+    state = install_docker(tmp_path, monkeypatch)
+    archive, _ = pack(tmp_path)
+    service = Service(tmp_path / 'state')
+    try:
+        jid, _ = service.submit(archive, 'submit')
+        (service.path(jid) / 'work' / 'tools' / 'demo' / 'extra.txt').write_text('later\n', encoding='utf-8')
+        launches = []
+        original = service._launch_worker
+        monkeypatch.setattr(service, '_launch_worker', lambda *args, **kwargs: launches.append(args) or original(*args, **kwargs))
+        service.launch(jid, 'start')
+        job = wait_job(service, jid)
+        assert job['state'] == 'failed', job
+        assert 'unpinned context file tools/demo/extra.txt' in job['error']
+        assert launches == []
+        assert not (state / 'builds').exists()
+    finally:
+        service._owner.close()
+
+
 def test_example_package_verifies(tmp_path):
     archive = tmp_path / 'example.rrpkg'
     assemble(ROOT / 'examples' / 'tool-image', archive)
