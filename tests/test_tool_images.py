@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from runner.package import assemble, validate_manifest, verify
+from runner.package import assemble, hash_file, validate_manifest, verify
 from runner.service import Service
 from runner.tool_images import derived_tag, input_hash
 from tests.v3_support import IMAGE_ID, ROOT, group_gone, install_docker, pack, wait_job, write_payload
@@ -364,6 +364,23 @@ def test_v3_without_tool_images_and_v1_v2_do_not_need_docker(tmp_path, monkeypat
         packed = tmp_path / (folder + '.rrpkg')
         assemble(ROOT / folder, packed)
         verify(packed)
+
+
+def test_skill_inside_context_must_be_pinned_before_verify(tmp_path):
+    source, manifest = write_payload(tmp_path)
+    skill = source / 'tools' / 'demo' / 'SKILL.md'
+    skill.write_text('skill\n', encoding='utf-8')
+    manifest['skills'] = ['tools/demo/SKILL.md']
+    (source / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+    with pytest.raises(ValueError, match='not pinned: tools/demo/SKILL.md'):
+        validate_manifest(manifest)
+    manifest['tool_images'][0]['inputs']['tools/demo/SKILL.md'] = hash_file(skill)
+    manifest['tool_images'][0]['tag'] = derived_tag(manifest['tool_images'][0])
+    (source / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+    archive = tmp_path / 'skill.rrpkg'
+    assemble(source, archive)
+    verified, _ = verify(archive)
+    assert 'tools/demo/SKILL.md' in verified['tool_images'][0]['inputs']
 
 
 def test_unpinned_context_file_cannot_share_an_image_identity(tmp_path, monkeypatch):

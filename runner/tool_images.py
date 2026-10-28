@@ -98,7 +98,8 @@ def validate_tool_images(manifest):
     if not isinstance(images, list) or not 1 <= len(images) <= MAX_IMAGES:
         raise ValueError('tool_images must contain 1..8 images')
     _reject_image_id(images)
-    declared = set(manifest['inputs'])
+    # brief, agents and skills are package files too, and cannot be repeated in inputs.
+    declared = {manifest['brief'], manifest['agents'], *manifest['skills'], *manifest['inputs']}
     names = set()
     for image in images:
         _validate_image(image, declared)
@@ -135,7 +136,7 @@ def _validate_image(image, declared):
         if not _inside(rel, context):
             raise ValueError('tool image input must be inside context: ' + rel)
         if rel not in declared:
-            raise ValueError('tool image input is not a package input: ' + rel)
+            raise ValueError('tool image input is not a declared package file: ' + rel)
     for path in declared:
         if _inside(path, context) and path not in inputs:
             raise ValueError('tool image context file is not pinned: ' + path)

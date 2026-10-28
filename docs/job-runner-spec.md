@@ -244,9 +244,10 @@ sha256 of the canonical JSON object `{containerfile, context, platform, inputs,
 fetch}` with sorted keys; `fetch` contributes only its sha256 values, in order,
 and is omitted when empty. Pins named `image_id` are rejected inside
 `tool_images`. Paths must be relative package inputs, and the Containerfile must
-sit inside the context. Every package file inside the context must be listed
-in `inputs`. A context that contains any other file fails before reuse or
-build, so the tag cannot hide bytes the hash does not cover.
+sit inside the context. Every package file inside the context, including the brief, agent instructions
+and skills, must be listed in that image's `inputs`. A context that contains
+any other file fails before reuse or build, so the tag cannot hide bytes the
+hash does not cover.
 
 On start, after any asset preparation and before the worker, the runner inspects
 that tag with the container CLI (`docker`, or `RESEARCH_RUNNER_CONTAINER_CLI`).
