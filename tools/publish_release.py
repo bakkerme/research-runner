@@ -26,9 +26,12 @@ class GitHub:
     def run(self, *args):
         return subprocess.check_output(['gh', *args], stderr=subprocess.PIPE)
 
-    def api(self, path, missing_ok=False):
+    def api(self, path, missing_ok=False, paginate=False):
+        args = ['api', f'repos/{self.repository}/{path}']
+        if paginate:
+            args.extend(['--paginate', '--slurp'])
         try:
-            return json.loads(self.run('api', f'repos/{self.repository}/{path}'))
+            return json.loads(self.run(*args))
         except subprocess.CalledProcessError as exc:
             if missing_ok and b'(HTTP 404)' in exc.stderr:
                 return None
@@ -39,7 +42,16 @@ class GitHub:
         return self.api('commits/' + quote('refs/tags/' + tag, safe=''))['sha']
 
     def release(self, tag):
-        return self.api('releases/tags/' + quote(tag, safe=''), missing_ok=True)
+        release = self.api('releases/tags/' + quote(tag, safe=''), missing_ok=True)
+        if release is not None:
+            return release
+        # Lookup by tag covers published releases. With push access, listing
+        # releases also includes drafts, including ones on later pages.
+        for page in self.api('releases?per_page=100', paginate=True):
+            for release in page:
+                if release['tag_name'] == tag:
+                    return release
+        return None
 
     def download(self, asset):
         return self.run('api', f'repos/{self.repository}/releases/assets/{asset["id"]}',

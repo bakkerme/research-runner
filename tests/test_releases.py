@@ -1,5 +1,6 @@
 """Release failure and retry behavior, without credentials or live mutations."""
 import io
+import json
 from pathlib import Path
 import subprocess
 import tarfile
@@ -70,6 +71,39 @@ class FakeGitHub:
     def publish(self, tag):
         self.mutations.append(('publish', tag))
         self.draft = False
+
+
+class DraftLookupGitHub(FakeGitHub, GitHub):
+    """Exercise the real REST adapter with GitHub's published-only tag lookup."""
+    repository = 'example/research-runner'
+    release = GitHub.release
+
+    def run(self, *args):
+        release = FakeGitHub.release(self, TAG)
+        if release:
+            release['tag_name'] = TAG
+        if args == ('api', f'repos/{self.repository}/releases/tags/{TAG}'):
+            if release and not release['draft']:
+                return json.dumps(release).encode()
+            raise subprocess.CalledProcessError(1, args, stderr=b'gh: Not Found (HTTP 404)')
+        assert args == ('api', f'repos/{self.repository}/releases?per_page=100', '--paginate', '--slurp')
+        # The desired draft can be on a later page among unrelated releases.
+        return json.dumps([[{'tag_name': 'v9.9.9'}], [release] if release else []]).encode()
+
+
+@pytest.mark.parametrize('exists', [False, True])
+def test_publisher_can_discover_new_and_existing_drafts(bundle, exists):
+    github = DraftLookupGitHub(bundle, exists=exists, draft=True)
+    publish_release(bundle, TAG, COMMIT, github)
+    assert github.mutations.count(('create', TAG)) == (0 if exists else 1)
+    assert github.mutations[-1] == ('publish', TAG)
+    assert len(github.files) == 4
+
+
+def test_complete_draft_can_be_discovered_for_reuse(bundle, tmp_path_factory):
+    github = DraftLookupGitHub(bundle, draft=True, names=[path.name for path in bundle.iterdir()])
+    assert download_complete_release(tmp_path_factory.mktemp('draft'), TAG, COMMIT, github)
+    assert github.mutations == []
 
 
 def test_new_release_is_draft_until_all_four_downloads_are_verified(bundle):
@@ -195,7 +229,21 @@ def test_only_not_found_is_treated_as_missing_release(monkeypatch):
         github.release(TAG)
 
     def missing(*args):
-        raise subprocess.CalledProcessError(1, args, stderr=b'gh: Not Found (HTTP 404)')
+        if 'releases/tags/' in args[1]:
+            raise subprocess.CalledProcessError(1, args, stderr=b'gh: Not Found (HTTP 404)')
+        return b'[[]]'
 
     monkeypatch.setattr(github, 'run', missing)
     assert github.release(TAG) is None
+
+
+def test_draft_listing_failure_is_not_treated_as_missing_release(monkeypatch):
+    github = GitHub('example/research-runner')
+
+    def fail(*args):
+        status = b'404' if 'releases/tags/' in args[1] else b'403'
+        raise subprocess.CalledProcessError(1, args, stderr=b'gh: request failed (HTTP ' + status + b')')
+
+    monkeypatch.setattr(github, 'run', fail)
+    with pytest.raises(subprocess.CalledProcessError):
+        github.release(TAG)
