@@ -17,9 +17,13 @@ def documents():
         for path in root.joinpath(folder).iterdir():
             if path.is_file() and path.name.endswith(suffix):
                 result[folder + '/' + path.name] = path.read_text(encoding='utf-8')
-    for path in root.joinpath('examples/asset-loader').iterdir():
-        if path.is_file() and path.name.endswith(('.py', '.json', '.toml', '.md')):
-            result['examples/asset-loader/' + path.name] = path.read_text(encoding='utf-8')
+    for folder in ('examples/asset-loader', 'examples/tool-image'):
+        base = root.joinpath(folder)
+        if not base.is_dir():
+            continue
+        for path in base.rglob('*'):
+            if path.is_file() and (path.name == 'Containerfile' or path.suffix in {'.py', '.json', '.toml', '.md', '.txt'}):
+                result[folder + '/' + path.relative_to(base).as_posix()] = path.read_text(encoding='utf-8')
     result['skills/research-runner/SKILL.md'] = bundled_skill()
     return result
 

@@ -26,7 +26,9 @@ def package_distribution(directory):
                 for name in names if name.startswith('runner/_bundle/') and not name.endswith('/')}
         required = {'README.md', 'AGENTS.md', 'docs/agent-quickstart.md', 'docs/client-workflow.md',
                     'docs/job-runner-spec.md', 'docs/asset-loaders.md', 'examples/asset-loader/loader.py',
-                    'schemas/asset-loader.json', 'schemas/research.json', 'schemas/manifest-v2.json'}
+                    'schemas/asset-loader.json', 'schemas/research.json', 'schemas/manifest-v2.json',
+                    'schemas/manifest-v3.json', 'examples/tool-image/manifest.json',
+                    'examples/tool-image/tools/demo/Containerfile', 'examples/tool-image/inputs/note.txt'}
         if not required <= docs.keys():
             raise ValueError('wheel documentation is incomplete: ' + str(sorted(required - docs.keys())))
         docs['skills/research-runner/SKILL.md'] = archive.read('runner/skills/research-runner/SKILL.md')

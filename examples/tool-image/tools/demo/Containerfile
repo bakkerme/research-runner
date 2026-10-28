@@ -1,0 +1,2 @@
+# Generic declared tool image. The runner tags it from the input hash.
+FROM scratch

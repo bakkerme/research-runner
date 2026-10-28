@@ -1,0 +1,53 @@
+{
+  "format": "research-package/v3",
+  "name": "tool-image-example",
+  "adapter": "fixture",
+  "runtime": {
+    "sdk": "openai-codex==0.159.0"
+  },
+  "brief": "brief.md",
+  "agents": "AGENTS.md",
+  "skills": [],
+  "inputs": [
+    "README.md",
+    "inputs/fixture.json",
+    "inputs/note.txt",
+    "tools/demo/Containerfile"
+  ],
+  "resources": {
+    "cpu": 1,
+    "memory_mb": 1024,
+    "time_seconds": 60
+  },
+  "required_outputs": [
+    "outputs/result.json",
+    "outputs/handoff.md",
+    "outputs/research.json"
+  ],
+  "policy": {
+    "finalization_seconds": 15,
+    "termination_seconds": 5,
+    "checkpoint_seconds": 30
+  },
+  "tool_images": [
+    {
+      "name": "demo",
+      "containerfile": "tools/demo/Containerfile",
+      "context": "tools/demo",
+      "platform": "linux/arm64",
+      "inputs": {
+        "tools/demo/Containerfile": "44a09f641a75afc6b4506e7e3cbbdf338106282bfead5f1ed035917c72e88654"
+      },
+      "timeout_seconds": 60,
+      "tag": "localhost/rr-tool/demo:in-103474661bf7afbf"
+    }
+  ],
+  "required_checks": [
+    "tool-image-provisioned"
+  ],
+  "provenance": {
+    "spec_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_commit": "example",
+    "assembler_version": "1"
+  }
+}

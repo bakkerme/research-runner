@@ -12,7 +12,7 @@ wheel or download a successful CI run artifact without cloning Runner. A local
 wheel can also be installed directly:
 
 ```sh
-python -m pip install /path/to/research_runner-0.4.0-py3-none-any.whl
+python -m pip install /path/to/research_runner-0.5.0-py3-none-any.whl
 research-runner docs
 research-runner init --url http://RUNNER:8765 --name experiment
 ```
