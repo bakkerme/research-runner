@@ -1,0 +1,104 @@
+name: Release
+run-name: Release ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+on:
+  push:
+    tags: ['v*']
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release or recover (for example v0.6.0)
+        required: true
+        type: string
+
+# A tag push and publishing through the UI can both start this workflow.
+concurrency:
+  group: release-${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.source.outputs.tag }}
+      commit: ${{ steps.source.outputs.commit }}
+      existing_artifact: ${{ steps.reuse.outputs.reused == 'true' && format('research-runner-existing-{0}', steps.source.outputs.commit) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+          path: source
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Require a version tag matching the tagged source
+        id: source
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os, re, subprocess, tomllib
+          tag = os.environ['RELEASE_TAG']
+          version = tomllib.load(open('source/pyproject.toml', 'rb'))['project']['version']
+          if not re.fullmatch(r'v\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?', tag) or tag != 'v' + version:
+              raise SystemExit('release tag must be v' + version + ' (the tagged package version)')
+          commit = subprocess.check_output(['git', '-C', 'source', 'rev-parse', 'HEAD'], text=True).strip()
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'tag={tag}\ncommit={commit}\n')
+          PY
+      - name: Reuse a complete release bundle for duplicate events and retries
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+          RELEASE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: python tools/publish_release.py --download-existing --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --dist dist
+      - uses: actions/upload-artifact@v4
+        if: steps.reuse.outputs.reused == 'true'
+        with:
+          name: research-runner-existing-${{ steps.source.outputs.commit }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+
+  validate:
+    needs: source
+    uses: ./.github/workflows/test.yml
+    with:
+      source_ref: ${{ needs.source.outputs.commit }}
+      existing_artifact: ${{ needs.source.outputs.existing_artifact }}
+
+  publish:
+    needs: [source, validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      # Use the workflow's tooling even when recovering a tag predating it.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.validate.outputs.artifact_name }}
+          path: dist
+      - name: Upload and verify the tested assets, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.source.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.source.outputs.commit }}
+        run: python tools/publish_release.py --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --dist dist

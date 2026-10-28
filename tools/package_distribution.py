@@ -8,6 +8,39 @@ import tarfile
 import zipfile
 
 
+VERSION = r'\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?'
+
+
+def distribution_files(version):
+    if not re.fullmatch(VERSION, version):
+        raise ValueError('unsupported release version')
+    return {f'research_runner-{version}-py3-none-any.whl',
+            f'research_runner-{version}.tar.gz', f'research-runner-docs-{version}.zip'}
+
+
+def verify_distribution(directory, tag):
+    """Verify a finished bundle without rewriting its checksums or archives."""
+    if not tag.startswith('v'):
+        raise ValueError('release tag must start with v')
+    expected = distribution_files(tag[1:])
+    directory = Path(directory)
+    if {path.name for path in directory.iterdir()} != expected | {'SHA256SUMS'}:
+        raise ValueError('distribution directory must contain exactly the four release assets')
+    inventory = {}
+    for line in (directory / 'SHA256SUMS').read_text(encoding='utf-8').splitlines():
+        match = re.fullmatch(r'([0-9a-f]{64})  (.+)', line)
+        if not match or match[2] not in expected or match[2] in inventory:
+            raise ValueError('invalid checksum inventory')
+        inventory[match[2]] = match[1]
+    if inventory.keys() != expected:
+        raise ValueError('checksum inventory is incomplete')
+    for name, checksum in inventory.items():
+        if hashlib.sha256((directory / name).read_bytes()).hexdigest() != checksum:
+            raise ValueError('distribution checksum mismatch: ' + name)
+    inventory['SHA256SUMS'] = hashlib.sha256((directory / 'SHA256SUMS').read_bytes()).hexdigest()
+    return inventory
+
+
 def package_distribution(directory):
     directory = Path(directory)
     wheels = list(directory.glob('research_runner-*-py3-none-any.whl'))
@@ -15,8 +48,7 @@ def package_distribution(directory):
         raise ValueError('expected exactly one Research Runner wheel in a clean distribution directory')
     wheel = wheels[0]
     version = wheel.name.removeprefix('research_runner-').removesuffix('-py3-none-any.whl')
-    if not re.fullmatch(r'\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?', version):
-        raise ValueError('unsupported release version')
+    distribution_files(version)
     source = directory / f'research_runner-{version}.tar.gz'
     if not source.is_file():
         raise ValueError('matching source distribution is missing')
