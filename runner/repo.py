@@ -142,7 +142,8 @@ class ResearchRepo:
             'Read inputs/question.md. Research the declared scope and validate the findings against its acceptance criteria.\n'
             'Include every required dependency in this payload before submission; identify unavailable inputs explicitly.\n'
             'Retain failed and inconclusive checks. Report blockers and useful partial results honestly.\n'
-            'Deliver outputs/result.json, outputs/handoff.md and outputs/research.json as described in AGENTS.md.\n', encoding='utf-8')
+            'Deliver outputs/result.json, outputs/handoff.md and outputs/research.json as described in AGENTS.md.\n'
+            'If the manifest lists required_checks, complete is accepted only when every listed check passed.\n', encoding='utf-8')
         (source / 'AGENTS.md').write_text(
             '# Research execution\n\n'
             'Work within the brief, supplied inputs and Runner deadline. Preserve original inputs.\n'
@@ -151,6 +152,8 @@ class ResearchRepo:
             'The closeout result uses format runner-result/v1 with outcome complete/partial/blocked,\n'
             'reason scope_complete/budget_exhausted/no_actionable_work/user_requested, summary, next_action and blockers.\n'
             'Complete requires scope_complete; blocked requires no_actionable_work and nonempty blockers.\n'
+            'When the manifest lists required_checks, outcome complete is accepted only if every listed check\n'
+            'passed. If a required check cannot be run, report partial or blocked instead of complete.\n'
             'Respect Runner finalization requests; finish early when no permitted work remains.\n\n'
             'Write outputs/research.json using runner-research/v1. Include scope, findings, evidence, validation,\n'
             'reproduction, deliverables and limitations. Findings refer to evidence IDs and state confidence\n'

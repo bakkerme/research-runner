@@ -79,6 +79,10 @@ class Service:
   self.owner_info={'pid':os.getpid(),'state':str(self.root)}
   self._write_owner()
   self.store=Store(self.root/'state.sqlite3');self.engine=engine;self.image=image
+  cli=os.environ.get('RESEARCH_RUNNER_CONTAINER_CLI','docker')
+  if not isinstance(cli,str) or not cli or any(c.isspace() or ord(c)<32 for c in cli):
+   raise ValueError('RESEARCH_RUNNER_CONTAINER_CLI must be a single executable path')
+  self.container_cli=cli
   # Explicit host configuration, never selected by a submitted workload.
   auth=os.environ.get('RESEARCH_RUNNER_CODEX_AUTH_FILE') if engine=='docker' else None
   self.auth_file=pathlib.Path(auth).expanduser().resolve(strict=True) if auth else None
@@ -86,6 +90,7 @@ class Service:
    raise ValueError('Codex auth projection must name a regular host file')
   self.procs={};self.stopping=set();self.lock=threading.Lock();self.controls=threading.RLock();self.cleanup_lock=threading.Lock()
   for marker in (self.root/'jobs').glob('*/assets/loader-runtime.json'):cleanup_orphan(marker)
+  for marker in (self.root/'jobs').glob('*/assets/tool-build-runtime.json'):cleanup_orphan(marker)
   self._kill_orphans();self.store.reconcile()
   known={j['id'] for j in self.store.list()}
   for p in (self.root/'jobs').glob('*'):
@@ -182,28 +187,33 @@ class Service:
     old=p/'work/outputs/result.json'
     if old.exists() or old.is_symlink():
      retained=p/'retained';retained.mkdir(exist_ok=True);old.rename(retained/f'result-before-{attempt}.json')
-   if m.get('dependencies'):
+   if m.get('dependencies') or m.get('tool_images'):
     cancel=threading.Event();self.preparing[jid]=cancel
     threading.Thread(target=self._prepare_launch,args=(jid,m,attempt,token,input_text,result,cancel,docker_user),daemon=True).start()
     return result
    return self._launch_worker(jid,m,attempt,token,input_text,result,docker_user)
 
- def _expose_dependency_receipt(self,jid):
-  source=self.path(jid)/'assets'/'receipt.json'
-  if not source.is_file() or source.is_symlink():raise ValueError('dependency receipt missing')
+ def _expose_controller_file(self,jid,source,dest_name,label):
+  if not source.is_file() or source.is_symlink():raise ValueError(label+' missing')
   work=self.path(jid)/'work'
-  if work.is_symlink():raise ValueError('workspace link blocks dependency receipt')
+  if work.is_symlink():raise ValueError('workspace link blocks '+label)
   view=work/'.runner'
-  if view.is_symlink():raise ValueError('workspace link blocks dependency receipt')
+  if view.is_symlink():raise ValueError('workspace link blocks '+label)
   view.mkdir(exist_ok=True)
-  dest=view/'dependencies.json'
+  dest=view/dest_name
   if dest.is_symlink():dest.unlink()
-  tmp=view/('.dependencies-'+uuid.uuid4().hex+'.tmp')
+  tmp=view/('.'+dest_name+'-'+uuid.uuid4().hex+'.tmp')
   try:
    tmp.write_bytes(source.read_bytes());tmp.chmod(0o444);tmp.replace(dest)
   finally:
    if tmp.exists():tmp.unlink(missing_ok=True)
   dest.chmod(0o444)
+
+ def _expose_dependency_receipt(self,jid):
+  self._expose_controller_file(jid,self.path(jid)/'assets'/'receipt.json','dependencies.json','dependency receipt')
+
+ def _expose_tool_image_receipt(self,jid):
+  self._expose_controller_file(jid,self.path(jid)/'assets'/'tool-images.json','tool-images.json','tool image receipt')
 
  def _dependency_receipt_mount(self,work):
   view=work/'.runner'
@@ -214,16 +224,27 @@ class Service:
 
  def _prepare_launch(self,jid,m,attempt,token,input_text,result,cancel,docker_user):
   from .assets import prepare
+  from .tool_images import provision
+  extension=None
   try:
-   prepare(self.path(jid),m['dependencies'],self.loaders,
-           progress=lambda data:self.store.append(jid,attempt,token,'asset_progress',data),
-           cancel=cancel,deadline=self.store.get(jid)['terminate_at'])
-   # Expose a read-only copy of the controller-owned receipt inside the workspace,
-   # so research can verify dependency identity (assets/ is outside the worker cwd
-   # and not mounted in Docker).
-   self._expose_dependency_receipt(jid)
+   if m.get('dependencies'):
+    prepare(self.path(jid),m['dependencies'],self.loaders,
+            progress=lambda data:self.store.append(jid,attempt,token,'asset_progress',data),
+            cancel=cancel,deadline=self.store.get(jid)['terminate_at'])
+    # Expose a read-only copy of the controller-owned receipt inside the workspace,
+    # so research can verify dependency identity (assets/ is outside the worker cwd
+    # and not mounted in Docker).
+    self._expose_dependency_receipt(jid)
+   if m.get('tool_images'):
+    started=time.monotonic()
+    provision(self.path(jid),m,
+              progress=lambda data:self.store.append(jid,attempt,token,'tool_image_progress',data),
+              cancel=cancel,docker=self.container_cli)
+    self._expose_tool_image_receipt(jid)
+    extension=min(time.monotonic()-started, 86400)
    with self.lock:
     if cancel.is_set():raise InterruptedError('asset preparation stopped by user')
+    if extension is not None:self.store.extend_deadline(jid,attempt,token,extension)
     self._launch_worker(jid,m,attempt,token,input_text,result,docker_user)
   except Exception as error:
    if self.store.get(jid)['state'] in ACTIVE:self.store.finish(jid,attempt,token,'interrupted' if isinstance(error,(InterruptedError,TimeoutError)) else 'failed',str(error))
@@ -429,7 +450,7 @@ class Service:
 
  def finalize(self,jid,key,reason='user_requested'):
   with self.controls:
-   if not is_mvp(self.manifest(jid)):raise ValueError('graceful finalize requires research-package/v2')
+   if not is_mvp(self.manifest(jid)):raise ValueError('graceful finalize requires research-package/v2 or research-package/v3')
    result,created=self.store.control(jid,'finalize',key,ACTIVE,'finalizing',{'reason':reason})
    if created:self._signal_finalize(jid)
    return result
@@ -479,6 +500,34 @@ class Service:
    path=self.path(jid)/'requests'/(rid+'.json');tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps({'decision':decision}));tmp.replace(path)
    return result
 
+ def _tool_images_satisfied(self,jid,m):
+  path=self.path(jid)/'assets'/'tool-images.json'
+  if path.is_symlink() or not path.is_file():return False
+  try:data=json.loads(path.read_text())
+  except (OSError,ValueError):return False
+  images=data.get('images') if isinstance(data,dict) else None
+  declared=m.get('tool_images') or []
+  if not isinstance(images,list) or len(images)!=len(declared):return False
+  return all(isinstance(item,dict) and item.get('name')==spec['name'] and item.get('action') in ('built','reused')
+             for spec,item in zip(declared,images))
+
+ def _enforce_required_checks(self,jid,m,files):
+  raw=files.get('outputs/research.json')
+  by_id={}
+  if raw is not None:
+   try:report=json.loads(raw)
+   except ValueError:report=None
+   if isinstance(report,dict) and isinstance(report.get('validation'),list):
+    for item in report['validation']:
+     if isinstance(item,dict) and isinstance(item.get('id'),str):by_id[item['id']]=item.get('status')
+  automatic=set()
+  if 'tool-image-provisioned' in m['required_checks'] and self._tool_images_satisfied(jid,m):
+   automatic.add('tool-image-provisioned')
+  for check in m['required_checks']:
+   if check in automatic:continue
+   status=by_id.get(check,'missing')
+   if status!='passed':raise ValueError(f'complete requires passed check {check} (status {status})')
+
  def _publish(self,jid,m,attempt,token,final=True):
   work=self.path(jid)/'work';pub=self.path(jid)/'artifacts';pub.mkdir(exist_ok=True)
   mvp=is_mvp(m);result=None;checkpoint=None;findings=[]
@@ -490,13 +539,16 @@ class Service:
     if any((pathlib.Path(root)/d).is_symlink() for d in dirs):raise ValueError('output links forbidden')
     names.extend((pathlib.Path(root)/f).relative_to(work).as_posix() for f in files)
   else:names=m['required_outputs']
-  receipt=self.path(jid)/'assets/receipt.json'
   if m.get('dependencies'):
    names=[n for n in names if n!='outputs/dependencies.json']+['outputs/dependencies.json']
+  if m.get('tool_images'):
+   names=[n for n in names if n!='outputs/tool-images.json']+['outputs/tool-images.json']
   if len(names)>MAX_FILES:raise ValueError('too many published output files')
   validated=[];total=0
   for name in sorted(names):
-   data=read_file(receipt.parent,'receipt.json') if m.get('dependencies') and name=='outputs/dependencies.json' else read_file(work,name)
+   if m.get('dependencies') and name=='outputs/dependencies.json':data=read_file(self.path(jid)/'assets','receipt.json')
+   elif m.get('tool_images') and name=='outputs/tool-images.json':data=read_file(self.path(jid)/'assets','tool-images.json')
+   else:data=read_file(work,name)
    total+=len(data)
    if total>MAX_TOTAL:raise ValueError('output quota exceeded')
    if mvp and name=='outputs/checkpoint.json':checkpoint=load_contract(Checkpoint,data)
@@ -514,6 +566,8 @@ class Service:
   metadata=[{'name':n,'sha256':digest(b),'size':len(b)} for n,b in validated]
   if mvp and final and 'outputs/research.json' in names:
    validate_research(dict(validated)['outputs/research.json'],{f['name']:f for f in metadata})
+  if mvp and final and result and result['outcome']=='complete' and m.get('required_checks'):
+   self._enforce_required_checks(jid,m,dict(validated))
   for meta,(_,data) in zip(metadata,validated):
    dst=pub/meta['sha256']
    if dst.exists():

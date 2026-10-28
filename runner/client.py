@@ -79,6 +79,10 @@ class Client:
             raise ValueError('server does not support this package format')
         if manifest.get('dependencies') and not caps.get('features', {}).get('asset_dependencies'):
             raise ValueError('server does not support asset dependencies')
+        if manifest.get('tool_images') and not caps.get('features', {}).get('tool_images'):
+            raise ValueError('server does not support tool images')
+        if manifest.get('required_checks') and not caps.get('features', {}).get('required_checks'):
+            raise ValueError('server does not support required checks')
         limits = caps.get('limits', {})
         if archive.stat().st_size > limits.get('archive_bytes', float('inf')):
             raise ValueError('archive exceeds server upload limit')

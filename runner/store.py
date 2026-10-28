@@ -1,5 +1,5 @@
 """SQLite job/event ledger. Every mutation and its event share one transaction."""
-import hashlib,json, sqlite3, time, uuid
+import hashlib,json, math, sqlite3, time, uuid
 from pathlib import Path
 
 ACTIVE={'running','finalizing'}
@@ -105,6 +105,17 @@ class Store:
    if not j or j['state'] not in ACTIVE or j['attempt']!=attempt or j['token']!=token:raise ValueError('stale attempt')
    if kind=='thread':c.execute('UPDATE jobs SET thread_id=? WHERE id=?',(data['id'],jid))
    self.event(c,jid,attempt,kind,data);c.execute('COMMIT')
+ def extend_deadline(self,jid,attempt,token,seconds):
+  """Give back time spent provisioning tool images before the worker starts."""
+  if isinstance(seconds,bool) or not isinstance(seconds,(int,float)) or not math.isfinite(seconds) or seconds<0 or seconds>86400:
+   raise ValueError('invalid deadline extension')
+  with self.db() as c:
+   c.execute('BEGIN IMMEDIATE');j=c.execute('SELECT * FROM jobs WHERE id=?',(jid,)).fetchone()
+   if not j or j['state'] not in ACTIVE or j['attempt']!=attempt or j['token']!=token:raise ValueError('stale attempt')
+   if j['deadline'] is None or j['finalize_at'] is None or j['terminate_at'] is None:raise ValueError('job has no deadline to extend')
+   c.execute('UPDATE jobs SET deadline=deadline+?,finalize_at=finalize_at+?,terminate_at=terminate_at+?,updated=? WHERE id=?',
+             (seconds,seconds,seconds,time.time(),jid))
+   self.event(c,jid,attempt,'deadline_extended',{'seconds':seconds});c.execute('COMMIT')
  def finish(self,jid,attempt,token,state,error=None):
   if state not in ('completed','finished','failed','interrupted','waiting'):raise ValueError(state)
   with self.db() as c:

@@ -77,6 +77,14 @@ def dependency_receipt_note(root):
          +str(path)+'. It is published as outputs/dependencies.json; do not write that name.\n')
 
 
+def tool_image_receipt_note(root):
+ """Tell the agent where the controller tool-image receipt is, when it is a regular file."""
+ view=root/'.runner';path=view/'tool-images.json'
+ if view.is_symlink() or path.is_symlink() or not path.is_file():return ''
+ return ('\nRunner tool image receipt (images built or reused by the controller, read-only): '
+         +str(path)+'. It is published as outputs/tool-images.json; do not write that name.\n')
+
+
 def fixture(root,m,requests):
  emit('progress',{'message':'Reading brief'})
  if not is_mvp(m):
@@ -96,8 +104,9 @@ def fixture(root,m,requests):
    outcome='partial';reason=control['reason'];break
   time.sleep(.02)
  else:
-  outcome='blocked' if mode=='blocked' else 'complete'
-  reason='no_actionable_work' if mode=='blocked' else 'scope_complete'
+  if mode=='blocked':outcome,reason='blocked','no_actionable_work'
+  elif mode=='partial':outcome,reason='partial','budget_exhausted'
+  else:outcome,reason='complete','scope_complete'
  blockers=['Fixture requires an unavailable input'] if outcome=='blocked' else []
  (root/'outputs/handoff.md').write_text(config.get('summary','Fixture outcome')+'\n')
  atomic(root/'outputs/result.json',{'format':'runner-result/v1','outcome':outcome,'reason':reason,'summary':config.get('summary','Fixture outcome'),'blockers':blockers,'next_action':'Supply missing input' if blockers else ''})
@@ -133,6 +142,9 @@ def main():
   prompt+='''\nRunner MVP contract: Follow the brief within the allotted scope. You may finish early when complete or when no allowed actionable path remains. Do not repeat unchanged failures to fill time. Preserve useful partial outputs and explain blockers. Atomically replace outputs/checkpoint.json after meaningful results with {"format":"runner-checkpoint/v1","summary":"...","next_action":"...","blockers":[]}. Before ending, write outputs/handoff.md and atomically replace outputs/result.json with {"format":"runner-result/v1","outcome":"complete|partial|blocked","reason":"scope_complete|budget_exhausted|no_actionable_work|user_requested","summary":"...","next_action":"...","blockers":[]}. Complete requires scope_complete and all required outputs; blocked requires no_actionable_work and nonempty blockers. A runner finalize message requires stopping new substantive work and wrapping up partial outputs. Bound each tool invocation to fit the remaining time; use only bounded owned operations. Dependency containers must be managed by workload tooling with explicit ownership, deadlines and cleanup; never leave untracked detached or remote work. Check /requests/finalize.json between operations. Domain conclusions remain your claims, not runner-validated facts.\n'''
   prompt+=f'Absolute hard deadline (Unix UTC seconds): {a.deadline}. Finalization reserve: {m["policy"]["finalization_seconds"]} seconds. Termination begins {m["policy"]["termination_seconds"]} seconds before that deadline.\n'
  prompt+=dependency_receipt_note(root)
+ prompt+=tool_image_receipt_note(root)
+ if m.get('required_checks'):
+  prompt+='Required checks ('+', '.join(m['required_checks'])+') must all pass before outcome complete. If one cannot be run, report partial or blocked with the blocker instead of complete.\n'
  prompt=prompt.replace('/requests/finalize.json',str(requests/'finalize.json'))
  done=threading.Event();finalizing=threading.Event()
  # Native execution uses the operator's installed Codex and normal credential /

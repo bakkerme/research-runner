@@ -1,0 +1,35 @@
+{
+  "mode": "complete",
+  "seconds": 0.05,
+  "summary": "Tool image example completed",
+  "text": "retained",
+  "research": {
+    "format": "runner-research/v1",
+    "scope": "Show a declared tool image provisioned before research.",
+    "findings": [],
+    "evidence": [
+      {
+        "id": "note",
+        "path": "outputs/partial.txt",
+        "description": "Fixture retained the example output."
+      }
+    ],
+    "validation": [
+      {
+        "id": "example-note",
+        "method": "Fixture write",
+        "status": "passed",
+        "expected": "retained",
+        "observed": "retained",
+        "evidence": ["note"]
+      }
+    ],
+    "reproduction": {
+      "commands": [],
+      "dependencies": [],
+      "notes": "Example package only."
+    },
+    "deliverables": ["outputs/partial.txt"],
+    "limitations": ["This example does not run a real container build in CI."]
+  }
+}

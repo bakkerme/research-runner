@@ -46,6 +46,10 @@ New definitions require `outputs/result.json`, `outputs/handoff.md` and
 `inputs/contracts.json`. Research reports link claims to evidence IDs, preserve
 passed/failed/inconclusive/not_run checks with methods and expected/observed
 results, and include reproduction steps, dependency hashes and limitations.
+When a manifest lists `required_checks`, outcome `complete` is accepted only if
+every listed check passed. If one cannot be run, report `partial` or `blocked`.
+A v3 `tool_images` declaration is provisioned by the runner; read the image id
+from `outputs/tool-images.json` or `.runner/tool-images.json`.
 Research-side validation is part of the work. A collection hash verifies delivered
 bytes; report the research's validation separately and qualify anything not
 independently reproduced. Run returned commands only when within the user's

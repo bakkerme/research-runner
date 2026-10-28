@@ -43,11 +43,14 @@ def relpath(value):
     return value
 
 
-def validate_manifest(m):
-    if m.get('format') not in ('research-package/v1','research-package/v2'): raise ValueError('unsupported package format')
+def validate_manifest(m, *, payload_hashes=None):
+    if m.get('format') not in ('research-package/v1','research-package/v2','research-package/v3'): raise ValueError('unsupported package format')
     fields = {'format','name','adapter','runtime','brief','agents','skills','inputs','resources','required_outputs'}
     if is_mvp(m): fields.add('policy')
     if is_mvp(m) and 'dependencies' in m: fields.add('dependencies')
+    if m.get('format')=='research-package/v3':
+        for optional in ('tool_images','required_checks','provenance'):
+            if optional in m: fields.add(optional)
     if set(m) != fields: raise ValueError('manifest fields')
     if m['adapter'] not in ('codex','fixture'): raise ValueError('adapter')
     if not isinstance(m['name'], str) or not m['name'] or len(m['name']) > 100: raise ValueError('name')
@@ -82,6 +85,18 @@ def validate_manifest(m):
         policy = Policy.model_validate(m['policy'])
         if policy.finalization_seconds >= r['time_seconds']: raise ValueError('finalization reserve must be smaller than time budget')
         if not {'outputs/result.json', 'outputs/handoff.md'} <= set(m['required_outputs']): raise ValueError('v2 requires result.json and handoff.md')
+    if 'tool_images' in m:
+        from .tool_images import validate_tool_images
+        validate_tool_images(m)
+    if 'required_checks' in m:
+        from .tool_images import validate_required_checks
+        validate_required_checks(m)
+    if 'provenance' in m:
+        from .tool_images import validate_provenance
+        validate_provenance(m['provenance'])
+    if payload_hashes is not None and m.get('tool_images'):
+        from .tool_images import check_tool_image_payload
+        check_tool_image_payload(m, payload_hashes)
     return m
 
 
@@ -110,6 +125,7 @@ def assemble(src, dest):
         total+=size
         if total>INPUT_MAX_TOTAL: raise ValueError('oversize package')
         files[name]={'size':size,'sha256':hash_file(p)}
+    if m.get('tool_images'): validate_manifest(m, payload_hashes={n:d['sha256'] for n,d in files.items()})
     envelope={'manifest':m,'sha256':{n:d['sha256'] for n,d in files.items()}}
     data=json.dumps(envelope,sort_keys=True,separators=(',',':')).encode()
     if len(data)>ENVELOPE_MAX or total+len(data)>INPUT_MAX_TOTAL: raise ValueError('package limits exceeded')
@@ -159,7 +175,7 @@ def _scan(archive, root=None):
             if size!=x.size: raise ValueError('truncated body')
             files[name]={'sha256':sha,'size':size}
     if meta is None: raise ValueError('missing package.json')
-    m=validate_manifest(meta['manifest'])
+    m=validate_manifest(meta['manifest'], payload_hashes={n:d['sha256'] for n,d in files.items()})
     if set(files)!=set(declared(m)) or set(meta['sha256'])!=set(files): raise ValueError('payload mismatch')
     if any(d['sha256']!=meta['sha256'][n] for n,d in files.items()): raise ValueError('hash mismatch')
     return m,files

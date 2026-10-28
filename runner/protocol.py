@@ -138,21 +138,22 @@ def load_contract(model, data):
 
 
 def is_mvp(manifest):
-    return manifest['format'] == 'research-package/v2'
+    return manifest['format'] in ('research-package/v2', 'research-package/v3')
 
 
 def capabilities():
+    from . import __version__
     from .package import INPUT_MAX_FILE, INPUT_MAX_TOTAL, MAX_ARCHIVE, MAX_FILE, MAX_TOTAL, MAX_FILES
     return {
-        'format': 'runner-capabilities/v1', 'version': '0.4.0',
-        'package_formats': ['research-package/v1', 'research-package/v2'],
+        'format': 'runner-capabilities/v1', 'version': __version__,
+        'package_formats': ['research-package/v1', 'research-package/v2', 'research-package/v3'],
         'adapters': ['fixture', 'codex'], 'max_running_jobs': 1,
         'default_engine': 'host', 'execution_engines': ['host', 'docker'],
         'limits': {'file_bytes': INPUT_MAX_FILE, 'package_bytes': INPUT_MAX_TOTAL,
                    'archive_bytes': MAX_ARCHIVE, 'files': MAX_FILES, 'contract_bytes': 65536,
                    'output_file_bytes': MAX_FILE, 'output_total_bytes': MAX_TOTAL},
         'features': {'bounded_runs': True, 'graceful_finalize': True,
-                     'asset_dependencies': True,
+                     'asset_dependencies': True, 'tool_images': True, 'required_checks': True,
                      'worker_deadline_failsafe': True,
                      'container_auth_file_projection': True, 'container_auth_refresh_qualified': False,
                      'partial_artifacts': True, 'event_paging': True,
@@ -195,4 +196,42 @@ def schemas():
     }
     properties['dependencies'] = {'type': 'array', 'maxItems': 100,
                                   'items': result['asset-dependency']}
+    sha = {'type': 'string', 'pattern': '^[a-f0-9]{64}$'}
+    v3 = dict(properties)
+    v3['format'] = {'const': 'research-package/v3'}
+    v3['tool_images'] = {
+        'type': 'array', 'minItems': 1, 'maxItems': 8,
+        'items': {
+            'type': 'object', 'additionalProperties': False,
+            'required': ['name', 'containerfile', 'context', 'platform', 'inputs', 'tag', 'timeout_seconds'],
+            'properties': {
+                'name': {'type': 'string', 'pattern': '^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$'},
+                'containerfile': path, 'context': path,
+                'platform': {'type': 'string', 'pattern': '^linux/[a-z0-9]+$'},
+                'inputs': {'type': 'object', 'minProperties': 1, 'maxProperties': 128, 'additionalProperties': sha},
+                'fetch': {'type': 'array', 'maxItems': 16, 'items': {
+                    'type': 'object', 'additionalProperties': False, 'required': ['sha256', 'dest'],
+                    'properties': {'url': {'type': 'string', 'minLength': 1, 'maxLength': 2000},
+                                   'url_from': {'type': 'string', 'minLength': 1, 'maxLength': 2000},
+                                   'sha256': sha, 'dest': path}}},
+                'tag': {'type': 'string', 'minLength': 1, 'maxLength': 200},
+                'timeout_seconds': {'type': 'integer', 'minimum': 1, 'maximum': 7200},
+            },
+        },
+    }
+    v3['required_checks'] = {
+        'type': 'array', 'maxItems': 50, 'uniqueItems': True,
+        'items': {'type': 'string', 'pattern': '^[a-z0-9][a-z0-9-]{0,99}$'},
+    }
+    v3['provenance'] = {
+        'type': 'object', 'minProperties': 1, 'maxProperties': 16,
+        'propertyNames': {'pattern': '^[a-z][a-z0-9_]{0,63}$'},
+        'additionalProperties': {'type': 'string', 'minLength': 1, 'maxLength': 256},
+    }
+    result['manifest-v3'] = {
+        '$schema': 'https://json-schema.org/draft/2020-12/schema', 'type': 'object',
+        'additionalProperties': False, 'required': list(result['manifest-v2']['required']),
+        'properties': v3,
+        'description': 'research-package/v3 is v2 plus optional tool_images, required_checks and provenance. Tag, hash, path and archive constraints are checked by research-runner verify.',
+    }
     return result

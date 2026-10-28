@@ -1,4 +1,4 @@
-# Research Runner 0.4.0
+# Research Runner 0.5.0
 
 A single-host runner for bounded agent jobs. **Codex runs on the host by default**,
 using the operator's normal login and session store. A payload supplies its brief,
@@ -51,7 +51,7 @@ or test dependencies needed):
 
 ```sh
 uv tool install --python 3.12 \
-  'research-runner[server] @ https://github.com/bakkerme/research-runner/releases/download/v0.4.0/research_runner-0.4.0-py3-none-any.whl'
+  'research-runner[server] @ https://github.com/bakkerme/research-runner/releases/download/v0.5.0/research_runner-0.5.0-py3-none-any.whl'
 uv tool update-shell
 # Open a new shell if uv added its executable directory to PATH.
 codex login status
@@ -65,7 +65,7 @@ use a successful CI artifact as described in the [quickstart](docs/agent-quickst
 verify its `SHA256SUMS`, and install the downloaded wheel instead:
 
 ```sh
-uv tool install --python 3.12 '/absolute/path/research_runner-0.4.0-py3-none-any.whl[server]'
+uv tool install --python 3.12 '/absolute/path/research_runner-0.5.0-py3-none-any.whl[server]'
 ```
 
 Keep state outside the installation so reinstalling Runner preserves jobs.
@@ -148,13 +148,24 @@ recommended. See [schemas](schemas/result.json) or `research-runner schemas`.
 claim. Validation is `not_run`; workload-specific checks/review are payload work.
 V1 jobs use the `completed` execution state.
 
-Workload tooling may invoke Docker/Podman for dependencies using normal host
-permissions. It must preflight its engine, pin its tool images, record ownership,
-mount originals appropriately, bound operations to remaining time and clean up
-its own containers. The MVP does not supervise arbitrary dependency containers
-through the agent execution engine. Agent process deadlines are not a substitute
-for tool-level timeout/cleanup. Container requirements belong in the workload
-brief/tools, not the agent runtime declaration.
+`research-package/v3` packages may declare `tool_images`. The runner builds a
+missing image, or reuses one whose `research.input_hash` label matches, before
+the worker starts. The tag is `localhost/rr-tool/<name>:in-<input hash>`. Fetch
+URLs must be https and are checked against the declared sha256. A build, hash,
+timeout or architecture failure ends the job before any Codex turn. Provisioning
+time is added back to the deadline so it is not taken from `time_seconds`. The
+receipt is published as `outputs/tool-images.json`. `required_checks` names ids
+in `outputs/research.json`; outcome `complete` is accepted only when each one
+passed. `partial` and `blocked` still publish. v1 and v2 packages are unchanged.
+See [the contract](docs/job-runner-spec.md) and [examples/tool-image](examples/tool-image/).
+
+Workload tooling may still invoke Docker/Podman for other dependencies using
+normal host permissions. It must preflight its engine, record ownership, mount
+originals appropriately, bound operations to remaining time and clean up its own
+containers. The runner does not supervise arbitrary dependency containers through
+the agent execution engine. Agent process deadlines are not a substitute for
+tool-level timeout/cleanup. Container requirements for those other tools belong
+in the workload brief, not the agent runtime declaration.
 
 Native Codex uses its workspace sandbox and configured approvals. Host execution
 does not provide container-level CPU/memory caps or enforce immutable input mounts;

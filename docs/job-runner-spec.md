@@ -23,7 +23,8 @@ prompting it.
 ## Package
 
 Use `research-package/v2` for persistent run budgets and structured outcomes.
-`research-package/v1` uses a per-attempt timeout and the `completed` state.
+`research-package/v3` is v2 plus optional `tool_images`, `required_checks` and
+`provenance`. `research-package/v1` uses a per-attempt timeout and the `completed` state.
 V2 includes a top-level `policy` object:
 
 ```json
@@ -72,9 +73,16 @@ dependencies on explicit start, before research execution. Their versioned proto
 optional limits, progress events, registration and validation command are specified
 in [the asset loader authoring guide](asset-loaders.md).
 
-V2 requires `outputs/result.json` and `outputs/handoff.md` in `required_outputs`.
+V2 and v3 require `outputs/result.json` and `outputs/handoff.md` in `required_outputs`.
 List additional required outputs for full completion. Partial/blocked closeout
 may omit those additional files, but must retain useful work and explain gaps.
+When `required_checks` is non-empty, `outputs/research.json` is also required.
+`complete` is rejected unless every listed id appears in that report's
+`validation` array with status `passed`. The rejection names the check and the
+status that was found, for example `complete requires passed check native-load (status not_run)`.
+`partial` and `blocked` are accepted regardless of those statuses. The id
+`tool-image-provisioned` is treated as passed when the tool-image receipt shows
+every declared image was built or reused, even if the report omits it.
 All regular files under `outputs/` are eligible for publication within output
 limits of 512 files, 32 MiB/file and 128 MiB per generation. Capabilities report
 these separately as `output_file_bytes` and `output_total_bytes`. Do not put
@@ -228,11 +236,43 @@ input mounts. The capability/status API reports that distinction. Session record
 remain in the host's Codex home; workload snapshots do not include them. Same-host
 resume is supported; cross-host native-session migration is not advertised.
 
-Optional Docker/Podman **dependency tools** are supplied and managed by the workload.
-Their image pins, assets, mounts, ownership, timeouts and cleanup belong in its
-brief/tooling. The agent execution engine does not automatically own these tool
-containers. They must remain bounded and recoverable if the agent is interrupted.
-No emulator-specific behavior is built into the runner.
+A v3 package may declare `tool_images`. Each entry names a context directory, a
+Containerfile inside that context, a `linux/<arch>` platform, the sha256 of each
+build input, an optional https `fetch`, a timeout, and a tag. The tag must be
+`localhost/rr-tool/<name>:in-<first 16 hex of input_hash>`. `input_hash` is the
+sha256 of the canonical JSON object `{containerfile, context, platform, inputs,
+fetch}` with sorted keys; `fetch` contributes only its sha256 values, in order,
+and is omitted when empty. Pins named `image_id` are rejected inside
+`tool_images`. Paths must be relative package inputs, and the Containerfile must
+sit inside the context.
+
+On start, after any asset preparation and before the worker, the runner inspects
+that tag with the container CLI (`docker`, or `RESEARCH_RUNNER_CONTAINER_CLI`).
+`DOCKER_HOST` is the service environment. A present image whose
+`research.input_hash` label matches is reused. Otherwise the context is copied
+to `jobs/<id>/tool-build/<name>/`, fetches are sha256-checked, and
+`docker build --platform <platform> --label research.input_hash=<hash> -t <tag>`
+runs as an argument list in its own process group. The build is killed on
+timeout, stop, or service restart. Progress is streamed as `tool_image_progress`.
+The image architecture must match the platform. Any failure finishes the job as
+`failed` with `tool image <name>: <reason>` before a worker or Codex turn starts.
+A stop during the build finishes as `interrupted` and kills the process group.
+Measured provisioning time is added to the deadline, finalization time and
+termination time, so the build does not consume `time_seconds`. This is not a
+general budget extension.
+
+The receipt `jobs/<id>/assets/tool-images.json` (`runner-tool-images/v1`) records
+each image's tag, id, architecture, input hash, `built` or `reused` action,
+seconds and `built_at`. It is exposed read-only at `work/.runner/tool-images.json`
+and published as `outputs/tool-images.json`. The [v3 example](../examples/tool-image/)
+is a generic image declaration. [sample-mvp](../sample-mvp/manifest.json) remains
+a v2 package and does not declare tool images.
+
+Other Docker/Podman dependency tools are still supplied and managed by the
+workload. Their image pins, assets, mounts, ownership, timeouts and cleanup
+belong in its brief/tooling. The agent execution engine does not automatically
+own those tool containers. They must remain bounded and recoverable if the agent
+is interrupted. No emulator-specific behavior is built into the runner.
 
 A separate explicit --engine docker mode can containerize the agent itself. That
 alternative requires an image pin and separate credential provisioning; its
@@ -254,13 +294,14 @@ They use the existing v2 package and HTTP operations; no new submission endpoint
 or server-side automatic continuation is introduced. Server dependencies are
 installed with the `server` extra.
 
-`outputs/research.json`, when present at normal v2 closeout, must satisfy
+`outputs/research.json`, when present at normal v2 or v3 closeout, must satisfy
 [`runner-research/v1`](../schemas/research.json). Its claims reference unique
 evidence IDs; checks preserve methods, expected/observed results and explicit
 passed/failed/inconclusive/not_run statuses. Evidence/deliverable paths must be
 published output files; supplied evidence hashes must match. The server validates
 structure and artifact linkage, while the workload performs scientific validation.
-New scaffolds require this report. Existing v2 packages without it remain valid.
+New scaffolds require this report and tell the agent that `required_checks`, when
+listed, gate outcome `complete`. Existing v2 packages without the report remain valid.
 Partial publications remain available even if a report is unfinished or invalid.
 
 `features.structured_research` advertises this extension. Existing status
