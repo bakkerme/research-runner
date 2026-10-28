@@ -2,52 +2,81 @@ name: Tests
 on:
   push:
     branches: ['**']
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_ref:
+        description: Exact commit to build and test
+        type: string
+        required: true
+      existing_artifact:
+        description: Complete release bundle to retest instead of rebuilding published files
+        type: string
+        default: ''
+    outputs:
+      artifact_name:
+        description: Bundle built once and used by all tests
+        value: ${{ jobs.distribution.outputs.artifact_name }}
 permissions:
   contents: read
 jobs:
   distribution:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      artifact_name: ${{ steps.source.outputs.artifact_name }}
+      commit: ${{ steps.source.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+      - name: Identify the checked out source
+        id: source
+        run: |
+          commit=$(git rev-parse HEAD)
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=research-runner-$commit" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install build
+      - run: python -m pip install build twine
       - name: Check committed source for machine-specific configuration
         run: python tools/check_portability.py --revision HEAD
-      - name: Check version tag
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          python -c 'import os,tomllib; v=tomllib.load(open("pyproject.toml","rb"))["project"]["version"]; assert os.environ["RELEASE_TAG"]=="v"+v, "tag must match package version"'
       - name: Build sdist and wheel from sdist
+        if: inputs.existing_artifact == ''
         run: python -m build
+      - uses: actions/download-artifact@v5
+        if: inputs.existing_artifact != ''
+        with:
+          name: ${{ inputs.existing_artifact }}
+          path: dist
       - name: Package docs and checksums from the wheel
         run: python tools/package_distribution.py --dist dist
+      - name: Validate distribution metadata
+        run: python -m twine check --strict dist/*.whl dist/*.tar.gz
       - uses: actions/upload-artifact@v4
         with:
-          name: research-runner-${{ github.sha }}
+          name: ${{ steps.source.outputs.artifact_name }}
           path: dist/*
           if-no-files-found: error
           retention-days: 90
+          overwrite: true
   fixtures:
     needs: distribution
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.distribution.outputs.commit }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
       - uses: actions/download-artifact@v5
         with:
-          name: research-runner-${{ github.sha }}
+          name: ${{ needs.distribution.outputs.artifact_name }}
           path: dist
       - run: python -m pip install -e '.[server,test]'
       - name: Install a separate producer without server dependencies
@@ -66,12 +95,14 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.distribution.outputs.commit }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - uses: actions/download-artifact@v5
         with:
-          name: research-runner-${{ github.sha }}
+          name: ${{ needs.distribution.outputs.artifact_name }}
           path: dist
       - shell: bash
         run: python -m pip install dist/*.whl pytest
@@ -81,20 +112,3 @@ jobs:
           cd "$RUNNER_TEMP"
           python -m pytest "$GITHUB_WORKSPACE/tests/test_producer.py" --import-mode=importlib -q
           python -c "import importlib.util; assert all(importlib.util.find_spec(m) is None for m in ('fastapi','uvicorn','openai_codex'))"
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [distribution, fixtures, installed-client]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v5
-        with:
-          name: research-runner-${{ github.sha }}
-          path: dist
-      - name: Publish tested assets without rebuilding
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --title "Research Runner $RELEASE_TAG" --generate-notes
