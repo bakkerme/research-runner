@@ -132,7 +132,9 @@ not determine RAM use. The operator can set `RESEARCH_RUNNER_INPUT_FILE_BYTES`
 and `RESEARCH_RUNNER_INPUT_TOTAL_BYTES` (positive integer bytes, total >= file) on
 both producer and server to change input quotas. `/api/capabilities` advertises the
 server quotas. Allow disk space for the upload, sealed archive and extracted inputs.
-Output publication remains limited to 32 MiB per file and 128 MiB per generation.
+Output publication remains limited to 4096 files and directories under
+`outputs/`, 32 MiB per file, and 128 MiB per generation. The entry cap is a
+safety net against unbounded trees. Input packages stay at 512 archive entries.
 
 ## Lifecycles and dependency tools
 

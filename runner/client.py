@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .package import MAX_FILE, MAX_FILES, MAX_TOTAL, digest, relpath, verify, hash_file
+from .package import MAX_FILE, MAX_OUTPUT_FILES, MAX_TOTAL, digest, relpath, verify, hash_file
 from .locking import file_lock
 
 
@@ -172,7 +172,7 @@ class Client:
         if generation is not None and manifest['generation'] != generation:
             raise ValueError('server returned a different generation')
         files = manifest['files']
-        if not isinstance(files, list) or len(files) > MAX_FILES:
+        if not isinstance(files, list) or len(files) > MAX_OUTPUT_FILES:
             raise ValueError('collection exceeds client limits')
         for meta in files:
             if type(meta.get('size')) is not int or not 0 <= meta['size'] <= MAX_FILE:

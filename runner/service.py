@@ -14,7 +14,7 @@ import uuid
 
 from .files import read_file
 from .events import MAX_EVENT_CHARS, approval_event_approvable
-from .package import MAX_FILE, MAX_FILES, MAX_TOTAL, declared, deploy, digest, relpath, read_manifest, hash_file, MAX_ARCHIVE
+from .package import MAX_FILE, MAX_OUTPUT_FILES, MAX_TOTAL, declared, deploy, digest, relpath, read_manifest, hash_file, MAX_ARCHIVE
 from .protocol import Checkpoint, Result, is_mvp, load_contract, validate_research
 from .store import ACTIVE, Store
 
@@ -535,7 +535,7 @@ class Service:
    names=[];entries=0
    for root,dirs,files in os.walk(work/'outputs',followlinks=False):
     entries+=len(dirs)+len(files)
-    if entries>MAX_FILES:raise ValueError('too many output entries')
+    if entries>MAX_OUTPUT_FILES:raise ValueError('too many output entries')
     if any((pathlib.Path(root)/d).is_symlink() for d in dirs):raise ValueError('output links forbidden')
     names.extend((pathlib.Path(root)/f).relative_to(work).as_posix() for f in files)
   else:names=m['required_outputs']
@@ -543,7 +543,7 @@ class Service:
    names=[n for n in names if n!='outputs/dependencies.json']+['outputs/dependencies.json']
   if m.get('tool_images'):
    names=[n for n in names if n!='outputs/tool-images.json']+['outputs/tool-images.json']
-  if len(names)>MAX_FILES:raise ValueError('too many published output files')
+  if len(names)>MAX_OUTPUT_FILES:raise ValueError('too many published output files')
   validated=[];total=0
   for name in sorted(names):
    if m.get('dependencies') and name=='outputs/dependencies.json':data=read_file(self.path(jid)/'assets','receipt.json')
