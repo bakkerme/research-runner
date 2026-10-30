@@ -55,8 +55,9 @@ Input limits: 512 archive entries, 8 GiB/file, 64 GiB total uncompressed bytes
 including the envelope (maximum 1 MiB). Override input byte quotas with
 `RESEARCH_RUNNER_INPUT_FILE_BYTES` and `RESEARCH_RUNNER_INPUT_TOTAL_BYTES` on the
 producer and server. Both must be positive integers and total must be >= file.
-Capabilities report `file_bytes`, `package_bytes` and `archive_bytes` (compressed
-upload cap, including headroom for gzip/tar overhead).
+Capabilities report `files`, `file_bytes`, `package_bytes` and `archive_bytes`
+(compressed upload cap, including headroom for gzip/tar overhead). `files` is
+the archive entry cap.
 
 Include research objects and dependencies as declared inputs. Assembly, upload,
 verification and extraction stream contents with bounded memory; upload processing
@@ -83,10 +84,17 @@ status that was found, for example `complete requires passed check native-load (
 `partial` and `blocked` are accepted regardless of those statuses. The id
 `tool-image-provisioned` is treated as passed when the tool-image receipt shows
 every declared image was built or reused, even if the report omits it.
-All regular files under `outputs/` are eligible for publication within output
-limits of 512 files, 32 MiB/file and 128 MiB per generation. Capabilities report
-these separately as `output_file_bytes` and `output_total_bytes`. Do not put
-sensitive runtime state there.
+All regular files under `outputs/` are eligible for publication. Publication
+walks `outputs/` and refuses the generation when files and directories together
+exceed 4096 entries, and again when the published file list exceeds 4096.
+Per-file and per-generation byte limits stay 32 MiB and 128 MiB. The entry cap
+is a safety net for runaway trees: a generation of 655 entries already exceeded
+the previous 512 cap, and 4096 leaves room for nested many-file results while
+the walk, artifact manifest, and per-file events stay bounded. Uploaded
+packages remain limited to 512 archive entries. Capabilities report the output
+cap as `output_files`, with `output_file_bytes` and `output_total_bytes`.
+Collection enforces the same output file cap. Do not put sensitive runtime
+state there.
 
 ## Worker files
 

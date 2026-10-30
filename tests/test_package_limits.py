@@ -44,6 +44,15 @@ def test_extraction_cleans_failed_hash_and_rejects_oversize_header(tmp_path, mon
  with pytest.raises(ValueError,match='unsafe archive member'):package.verify(oversized)
 
 
+def test_archive_entry_cap_stays_at_512(tmp_path):
+ archive=tmp_path/'many.rrpkg'
+ with tarfile.open(archive,'w:gz') as t:
+  for i in range(package.MAX_FILES+1):
+   item=tarfile.TarInfo(f'f{i}.txt');item.size=1;t.addfile(item,io.BytesIO(b'x'))
+ with pytest.raises(ValueError,match='too many entries'):package.verify(archive)
+ assert package.MAX_FILES==512 and package.MAX_OUTPUT_FILES==4096 and package.MAX_OUTPUT_FILES>package.MAX_FILES
+
+
 def test_http_stream_upload_limit_cleans_temporary_file(tmp_path, monkeypatch):
  from fastapi.testclient import TestClient
  from runner.web import app

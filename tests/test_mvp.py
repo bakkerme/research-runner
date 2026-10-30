@@ -13,8 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from runner.client import Client
-from runner.package import assemble, digest, verify, validate_manifest
-from runner.protocol import Result, schemas
+from runner.package import MAX_FILES, MAX_OUTPUT_FILES, assemble, digest, verify, validate_manifest
+from runner.protocol import Result, capabilities, schemas
 from runner.service import Service
 from runner.store import ACTIVE, Store
 from runner.web import app
@@ -248,6 +248,42 @@ def test_worker_has_independent_deadline_without_a_controller(tmp_path):
   assert not (work/'outputs/result.json').exists()
  finally:
   if proc.poll() is None:proc.kill();proc.wait(timeout=5)
+
+
+def test_output_entry_cap_accepts_large_trees_and_still_rejects_runaway_output(tmp_path):
+ """A 655-entry outputs tree previously exceeded the shared 512 cap. Keep a higher safety net."""
+ service=Service(tmp_path/'state','host');jid,_=service.submit(package(tmp_path,seconds=20),'s')
+ m=service.manifest(jid)
+ attempt,token,created,_=service.store.start_attempt(jid,'launch',budget=m['resources']['time_seconds'],policy=m['policy'],engine='host')
+ assert created and service.store.get(jid)['state']=='running'
+ outputs=service.path(jid)/'work'/'outputs';outputs.mkdir(exist_ok=True)
+ # 600 files in 60 directories: 660 entries, above the old cap and within 4096.
+ for i in range(600):
+  group=outputs/f'group-{i//10:03d}';group.mkdir(exist_ok=True)
+  (group/f'file-{i:04d}.txt').write_bytes(b'x')
+ service._publish(jid,m,attempt,token,False)
+ assert len(service.store.publication(jid)['files'])==600
+ shutil.rmtree(outputs);outputs.mkdir()
+ for i in range(MAX_OUTPUT_FILES):(outputs/f'd{i}').mkdir()
+ service._publish(jid,m,attempt,token,False)
+ (outputs/'one-more').mkdir()
+ with pytest.raises(ValueError,match='too many output entries'):service._publish(jid,m,attempt,token,False)
+ assert len(service.store.publication(jid)['files'])==600
+ v1=dict(m,format='research-package/v1',required_outputs=[f'outputs/f{i}.txt' for i in range(MAX_OUTPUT_FILES+1)])
+ with pytest.raises(ValueError,match='too many published output files'):service._publish(jid,v1,attempt,token,False)
+
+
+def test_collection_and_capabilities_use_the_output_entry_cap():
+ limits=capabilities()['limits']
+ assert limits['files']==MAX_FILES==512
+ assert limits['output_files']==MAX_OUTPUT_FILES==4096
+ client=Client('http://runner.invalid')
+ def manifest(count):
+  return {'job_id':'job','generation':1,'files':[{'name':f'outputs/f{i}.bin','size':1,'sha256':'ab'*32} for i in range(count)]}
+ client._validate_collection(manifest(MAX_FILES+1),'job',None)
+ client._validate_collection(manifest(MAX_OUTPUT_FILES),'job',None)
+ with pytest.raises(ValueError,match='collection exceeds client limits'):
+  client._validate_collection(manifest(MAX_OUTPUT_FILES+1),'job',None)
 
 
 def test_idempotency_keys_are_scoped_and_legacy_keys_migrate(tmp_path):

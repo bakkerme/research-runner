@@ -5,6 +5,16 @@ from .protocol import Policy, is_mvp
 MAX_FILE = 32 * 1024 * 1024
 MAX_TOTAL = 128 * 1024 * 1024
 MAX_FILES = 512
+# Safety net for one outputs/ tree. Publication counts every file and directory
+# under outputs/, then counts published files again (including injected
+# receipts). 512 rejected a real generation of 655 entries. 4096 is eight times
+# that old cap, about six times the failed tree, so nested many-file results
+# fit while the walk, artifact manifest, and per-file events stay bounded.
+# 2000 would be only about three times the observed tree and can be consumed by
+# directories before the files are counted. Byte quotas still apply: 32 MiB per
+# file and 128 MiB per generation. Archive admission stays at MAX_FILES because
+# uploaded packages are untrusted; outputs are produced only after admission.
+MAX_OUTPUT_FILES = 4096
 # Input quotas are independent of frequently published output artifacts.
 INPUT_MAX_FILE = int(os.getenv('RESEARCH_RUNNER_INPUT_FILE_BYTES', 8 * 1024**3))
 INPUT_MAX_TOTAL = int(os.getenv('RESEARCH_RUNNER_INPUT_TOTAL_BYTES', 64 * 1024**3))
