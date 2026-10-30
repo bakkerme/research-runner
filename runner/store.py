@@ -5,6 +5,23 @@ from pathlib import Path
 ACTIVE={'running','finalizing'}
 STATES={'queued','running','finalizing','finished','waiting','interrupted','completed','failed'}
 
+class _ClosingConnection:
+ """Commit or roll back, then close.
+
+ sqlite3.Connection's context manager ends the transaction and leaves the
+ connection open. Store opens one connection per operation, and unclosed
+ connections keep the database and WAL descriptors until a later cyclic
+ collection. A long job opens often enough for that pile to make a new
+ open fail with "unable to open database file" while the file itself is fine.
+ """
+ def __init__(self,connection):
+  self.connection=connection
+ def __enter__(self):
+  return self.connection.__enter__()
+ def __exit__(self,exc_type,exc,tb):
+  try:return self.connection.__exit__(exc_type,exc,tb)
+  finally:self.connection.close()
+
 class Store:
  def __init__(self,path):
   self.path=Path(path);self.path.parent.mkdir(parents=True,exist_ok=True)
@@ -31,7 +48,14 @@ class Store:
     if name not in columns:c.execute(f'ALTER TABLE jobs ADD COLUMN {name} {kind}')
    c.execute('CREATE TABLE IF NOT EXISTS publications(job_id TEXT,generation INTEGER,attempt INTEGER,manifest TEXT,PRIMARY KEY(job_id,generation))')
  def db(self):
-  c=sqlite3.connect(self.path,timeout=30,isolation_level=None);c.row_factory=sqlite3.Row;c.execute('PRAGMA journal_mode=WAL');c.execute('PRAGMA busy_timeout=30000');return c
+  c=sqlite3.connect(self.path,timeout=30,isolation_level=None)
+  try:
+   c.row_factory=sqlite3.Row
+   c.execute('PRAGMA journal_mode=WAL')
+   c.execute('PRAGMA busy_timeout=30000')
+  except BaseException:
+   c.close();raise
+  return _ClosingConnection(c)
  def event(self,c,jid,attempt,kind,data):
   c.execute('INSERT INTO events(job_id,attempt,kind,data,ts) VALUES(?,?,?,?,?)',(jid,attempt,kind,json.dumps(data,sort_keys=True),time.time()))
  def submit(self,jid,name,adapter,key,package_hash):
