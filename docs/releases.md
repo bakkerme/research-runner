@@ -6,14 +6,13 @@ There is no PyPI publication or separate build for each operating system.
 
 ## Cut a release
 
-1. Change `[project].version` in `pyproject.toml` and update versioned installation
-   examples when appropriate. Use `MAJOR.MINOR.PATCH`, optionally followed by
-   `aN`, `bN`, or `rcN`. Merge the reviewed changes and wait for Tests to pass.
-2. In GitHub, choose **Releases → Draft a new release**. Create `vVERSION`
-   targeting the intended commit, write release notes, and publish. Alternatively,
-   push an annotated `vVERSION` tag. The tagged package version must match exactly;
-   the workflow does not change versions or manufacture tags.
-3. Watch the **Release** workflow. Consumers should wait for its success and all
+1. In GitHub, choose **Releases → Draft a new release**. Create `vVERSION`
+   targeting the intended commit, write release notes, and publish. Use
+   `MAJOR.MINOR.PATCH`, optionally followed by `aN`, `bN`, or `rcN` (for example
+   `v0.6.0` or `v0.7.0rc1`). This is the only release action required. There is no
+   separate version-bump commit: the release tag supplies the package version.
+   Pushing an annotated `vVERSION` tag also remains supported.
+2. Watch the **Release** workflow. Consumers should wait for its success and all
    four attached assets before installing. A release made through the GitHub UI
    is visible while the workflow runs; an automatically created release stays a
    draft until its assets have been uploaded and downloaded for verification.
@@ -26,11 +25,14 @@ events do not replace files with builds having different archive timestamps.
 
 ## What gates publication
 
-The Release workflow resolves the tag to a commit and checks `pyproject.toml`.
+The Release workflow validates the version tag and resolves it to a commit.
 It calls the same Tests workflow used on branches and pull requests, pinned to
-that commit. Tests builds the sdist with `python -m build`, which builds the wheel
-from the sdist, then runs `tools/package_distribution.py` to check bundled docs,
-schemas, examples and the skill and generate the docs ZIP and checksums. Twine
+that commit. In disposable release checkouts, `tools/prepare_release.py` sets
+`[project].version` and `runner.__version__` from the tag before building or
+installing the source. No source commit or tag is changed. Ordinary branch/PR CI
+and unstamped local builds retain the source's baseline version. Tests builds the
+sdist with `python -m build`, which builds the wheel from the sdist, then runs
+`tools/package_distribution.py` to check bundled docs, schemas, examples and the skill and generate the docs ZIP and checksums. Twine
 checks distribution metadata. The portability guard checks the committed tree.
 
 The server/fixture suite includes an isolated installed producer CLI against a
@@ -62,17 +64,24 @@ gh workflow run release.yml --ref main -f tag=v0.5.0
 
 This runs the current release tooling against the tagged source, builds or
 reuses the bundle, tests it, and attaches the assets to the existing release.
+It also handles a tag whose source still has an older baseline version, such as
+`v0.6.0`: the new build takes its version from the tag. Merge the updated workflow
+first, then dispatch it from `main`; rerunning an old failed run uses its old
+workflow definition.
 An incomplete older release containing conflicting files requires the original
 tested artifact; rebuilding can produce different archive bytes even from the
 same commit. Do not move or recreate a released tag to work around that error.
 
-The CI artifact is named `research-runner-COMMIT_SHA` and retained for 90 days.
-If an older workflow's final publishing job failed but **all** its distribution,
+CI artifacts are retained for 90 days. Ordinary CI uses
+`research-runner-COMMIT_SHA`; releases use `research-runner-COMMIT_SHA-vVERSION`
+so different versions of the same commit have distinct bundles. Older release
+runs used the ordinary CI name.
+If a workflow's final publishing job failed but **all** its distribution,
 fixture and installed-client jobs passed, a maintainer can download its original
 artifact and run the current publisher without rebuilding:
 
 ```sh
-gh run download RUN_ID --name research-runner-COMMIT_SHA --dir release-recovery
+gh run download RUN_ID --name research-runner-COMMIT_SHA-vVERSION --dir release-recovery
 python tools/publish_release.py --repo OWNER/REPOSITORY \
   --tag vVERSION --commit FULL_TESTED_COMMIT_SHA --dist release-recovery
 ```
@@ -83,6 +92,10 @@ invocation cannot establish that the selected run passed its tests. It requires
 an authenticated GitHub CLI with release write access. A complete release can be
 retested via the manual workflow as often as needed.
 
+To test a versioned bundle without uploading release assets, manually run the
+**Tests** workflow with its optional `release_tag` input. This exercises the same
+version preparation, build, and test jobs used by Release.
+
 ## Reproduce the package locally
 
 Build from a clean checkout into a new output directory so private state and old
@@ -90,6 +103,8 @@ packages cannot enter the bundle:
 
 ```sh
 python -m pip install build twine
+# For a release build, first stamp a disposable checkout with the intended tag:
+python tools/prepare_release.py --tag v0.6.0
 python -m build --outdir /tmp/runner-release-dist
 python tools/package_distribution.py --dist /tmp/runner-release-dist
 python -m twine check --strict /tmp/runner-release-dist/*.whl /tmp/runner-release-dist/*.tar.gz
@@ -98,4 +113,6 @@ python -m twine check --strict /tmp/runner-release-dist/*.whl /tmp/runner-releas
 Use a fresh virtual environment to install that wheel and `pytest`, change to a
 directory outside the source checkout, and run `tests/test_producer.py` with
 `--import-mode=importlib`. Server tests use an editable `.[server,test]` install
-and `pytest -q`. Keep generated distributions and recovery downloads out of Git.
+and `pytest -q`. For release validation, install after applying the release tag so
+the source and installed wheel report the same version. Keep generated
+distributions and recovery downloads out of Git.

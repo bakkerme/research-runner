@@ -1,4 +1,4 @@
-# Research Runner 0.5.0
+# Research Runner
 
 A single-host runner for bounded agent jobs. **Codex runs on the host by default**,
 using the operator's normal login and session store. A payload supplies its brief,
@@ -272,11 +272,11 @@ the checkout. The Linux suite also runs the complete installed CLI against a
 disposable HTTP service. Only a successful workflow should be consumed.
 
 The Release workflow runs when a `vVERSION` tag is pushed, a GitHub release is
-published, or a maintainer manually selects an existing tag. It requires a matching
-version in `pyproject.toml` and calls Tests before attaching the exact tested
-assets. It can fill an empty release and safely retry missing uploads; existing
-files with different checksums are never overwritten. Automatically created
-releases stay in draft until uploads are verified. See the [release guide](docs/releases.md) for the UI
+published, or a maintainer manually selects an existing tag. The tag supplies the
+package and runtime version automatically; no version-bump commit is needed. It
+calls Tests before attaching the exact tested assets. It can fill an empty release
+and safely retry missing uploads; existing files with different checksums are never
+overwritten. Automatically created releases stay in draft until uploads are verified. See the [release guide](docs/releases.md) for the UI
 process, CLI alternatives, prereleases, and recovery. This does not publish to
 PyPI. Local maintainers can reproduce the bundle with `python -m build` followed by
 `python tools/package_distribution.py --dist dist` in a clean output directory.

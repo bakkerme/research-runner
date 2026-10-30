@@ -384,3 +384,10 @@ def test_client_rejects_asset_submission_to_old_server(tmp_path):
     client.request = lambda *args: {'package_formats': ['research-package/v2'], 'features': {}}
     with pytest.raises(ValueError, match='asset dependencies'):
         client.submit(package['archive'], 'key', tmp_path / 'receipt.json', apply=True)
+
+
+def test_installed_runtime_version_matches_distribution_metadata():
+    from importlib.metadata import version
+    import runner
+
+    assert runner.__version__ == version('research-runner')
