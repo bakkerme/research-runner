@@ -4,12 +4,14 @@ import json
 from pathlib import Path
 import subprocess
 import tarfile
+import tomllib
 import zipfile
 
 import pytest
 
 from tools.package_distribution import package_distribution, verify_distribution
 from tools.publish_release import GitHub, download_complete_release, publish_release
+from tools.prepare_release import prepare_release
 
 
 TAG = 'v1.2.3'
@@ -247,3 +249,45 @@ def test_draft_listing_failure_is_not_treated_as_missing_release(monkeypatch):
     monkeypatch.setattr(github, 'run', fail)
     with pytest.raises(subprocess.CalledProcessError):
         github.release(TAG)
+
+
+@pytest.fixture
+def release_source(tmp_path):
+    (tmp_path / 'pyproject.toml').write_text(
+        '[project]\nname = "research-runner"\nversion = "0.5.0"\n'
+        '[tool.example]\nversion = "keep-me"\n', encoding='utf-8')
+    (tmp_path / 'runner').mkdir()
+    (tmp_path / 'runner/__init__.py').write_text(
+        '"""Runner."""\n__version__ = "0.5.0"\n', encoding='utf-8')
+    return tmp_path
+
+
+@pytest.mark.parametrize('version', ['0.6.0', '1.0.0a1', '1.0.0b2', '1.0.0rc3'])
+def test_release_tag_sets_package_and_runtime_versions_without_a_bump_commit(release_source, version):
+    assert prepare_release(release_source, 'v' + version) == version
+    project = tomllib.loads((release_source / 'pyproject.toml').read_text(encoding='utf-8'))
+    assert project['project']['version'] == version
+    assert project['tool']['example']['version'] == 'keep-me'
+    runtime = {}
+    exec((release_source / 'runner/__init__.py').read_text(encoding='utf-8'), runtime)
+    assert runtime['__version__'] == version
+    before = (release_source / 'pyproject.toml').read_bytes()
+    prepare_release(release_source, 'v' + version)
+    assert (release_source / 'pyproject.toml').read_bytes() == before
+
+
+@pytest.mark.parametrize('tag', ['0.6.0', 'v0.6', 'v01.2.3', 'v1.2.3rc01',
+                                 'v1.2.3+local', 'v1.2.3/post1', 'v1.2.3\nother'])
+def test_invalid_release_tags_cannot_modify_source(release_source, tag):
+    before = {path: path.read_bytes() for path in release_source.rglob('*') if path.is_file()}
+    with pytest.raises(ValueError, match='release tag must be'):
+        prepare_release(release_source, tag)
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_missing_runtime_version_cannot_leave_package_half_prepared(release_source):
+    (release_source / 'runner/__init__.py').write_text('"""No version."""\n', encoding='utf-8')
+    before = (release_source / 'pyproject.toml').read_bytes()
+    with pytest.raises(ValueError, match='runtime __version__'):
+        prepare_release(release_source, 'v0.6.0')
+    assert (release_source / 'pyproject.toml').read_bytes() == before

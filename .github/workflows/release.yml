@@ -38,21 +38,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Require a version tag matching the tagged source
+      - name: Validate the release tag and identify its source
         id: source
         env:
           RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
         run: |
-          python - <<'PY'
-          import os, re, subprocess, tomllib
-          tag = os.environ['RELEASE_TAG']
-          version = tomllib.load(open('source/pyproject.toml', 'rb'))['project']['version']
-          if not re.fullmatch(r'v\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?', tag) or tag != 'v' + version:
-              raise SystemExit('release tag must be v' + version + ' (the tagged package version)')
-          commit = subprocess.check_output(['git', '-C', 'source', 'rev-parse', 'HEAD'], text=True).strip()
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write(f'tag={tag}\ncommit={commit}\n')
-          PY
+          python tools/prepare_release.py --source source --tag "$RELEASE_TAG"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git -C source rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Reuse a complete release bundle for duplicate events and retries
         id: reuse
         env:
@@ -75,6 +68,7 @@ jobs:
     uses: ./.github/workflows/test.yml
     with:
       source_ref: ${{ needs.source.outputs.commit }}
+      release_tag: ${{ needs.source.outputs.tag }}
       existing_artifact: ${{ needs.source.outputs.existing_artifact }}
 
   publish:

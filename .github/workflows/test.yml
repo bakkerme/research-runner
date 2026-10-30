@@ -4,12 +4,21 @@ on:
     branches: ['**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional version tag to test a release build without publishing
+        type: string
+        default: ''
   workflow_call:
     inputs:
       source_ref:
         description: Exact commit to build and test
         type: string
         required: true
+      release_tag:
+        description: Release tag supplying the package version; empty for ordinary CI
+        type: string
+        default: ''
       existing_artifact:
         description: Complete release bundle to retest instead of rebuilding published files
         type: string
@@ -33,13 +42,27 @@ jobs:
           ref: ${{ inputs.source_ref || github.sha }}
       - name: Identify the checked out source
         id: source
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           commit=$(git rev-parse HEAD)
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=research-runner-$commit" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=research-runner-$commit${RELEASE_TAG:+-$RELEASE_TAG}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Check out release tooling
+        if: inputs.release_tag != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: tools
+      - name: Apply the release version to the temporary checkout
+        if: inputs.release_tag != ''
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python .release-tools/tools/prepare_release.py --tag "$RELEASE_TAG"
       - run: python -m pip install build twine
       - name: Check committed source for machine-specific configuration
         run: python tools/check_portability.py --revision HEAD
@@ -78,6 +101,18 @@ jobs:
         with:
           name: ${{ needs.distribution.outputs.artifact_name }}
           path: dist
+      - name: Check out release tooling
+        if: inputs.release_tag != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: tools
+      - name: Apply the release version to the temporary checkout
+        if: inputs.release_tag != ''
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python .release-tools/tools/prepare_release.py --tag "$RELEASE_TAG"
       - run: python -m pip install -e '.[server,test]'
       - name: Install a separate producer without server dependencies
         run: |
