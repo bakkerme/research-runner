@@ -42,6 +42,30 @@ def supervisor_join_timeout():
  return cleanup_seconds()*3+30
 
 
+def status_backoff(failures):
+ """How long to wait before another job-status read after a store error.
+
+ The supervisor still wakes often enough to enforce the in-memory hard
+ deadline. This delay only spaces database reads, so a transient open or
+ lock error does not become a tight failure loop.
+ """
+ if failures<1:return .05
+ return min(5.,.05*(2**min(failures-1,8)))
+
+
+def status_interval(now,soft,last_checkpoint,checkpoint_seconds):
+ """How soon the supervisor needs another job-status read.
+
+ The hard deadline is already in memory and is checked on every short wake.
+ Far from finalization, wait until the next checkpoint or the soft deadline.
+ Inside the finalization window, poll on that short wake.
+ """
+ if now>=soft-.05:return .05
+ if not last_checkpoint:return .05
+ remaining=max(.05,checkpoint_seconds-(now-last_checkpoint))
+ return min(remaining,max(.05,soft-now))
+
+
 def stop_reconcile_timeout():
  """How long stop() blocks the caller after accepting the stop.
 
@@ -294,36 +318,58 @@ class Service:
     if not line:break
     stderr.append(line)
   threading.Thread(target=drain,daemon=True).start()
-  j=self.store.get(jid);start=time.monotonic();wall=time.time()
+  # Stdout is not read yet, so a failed open is retried only briefly.
+  # Deadlines are taken from the row once that read succeeds.
+  failures=0
+  while True:
+   try:j=self.store.get(jid);break
+   except sqlite3.OperationalError:
+    failures+=1
+    if failures>=5:raise
+    time.sleep(status_backoff(failures))
+  start=time.monotonic();wall=time.time()
   hard=start+(j['terminate_at']-wall if is_mvp(m) else m['resources']['time_seconds'])
   soft=start+(j['finalize_at']-wall) if is_mvp(m) else hard
   def supervise():
-   last=0
+   last=0;failures=0;next_status=0.
    while not done.wait(.05):
+    now=time.monotonic()
+    # Deadline is computed once from the job row. It does not need the DB,
+    # and a status failure must not delay it.
+    if now>=hard:
+     forced.set()
+     try:self._stop_process(proc,cmd)
+     except Exception as stop_error:supervisor_errors.append(str(stop_error))
+     return
+    if not is_mvp(m) or now<next_status:continue
     try:
-     now=time.monotonic()
-     if now>=hard:
-      forced.set();self._stop_process(proc,cmd);return
-     if is_mvp(m):
-      state=self.store.get(jid)['state']
-      if state not in ACTIVE:return
-      if now>=soft and state=='running':
-       try:self.finalize(jid,f'deadline-{jid}-{attempt}','budget_exhausted')
-       except ValueError:pass # state changed concurrently (finished/stopped/finalizing)
-      elif state=='finalizing':self._signal_finalize(jid)
-      if now-last>=m['policy']['checkpoint_seconds']:
-       last=now
-       # Checkpoints are best effort; a bad intermediate output must not kill the run.
-       try:self._publish(jid,m,attempt,token,final=False)
-       except Exception as error:
-        try:self.store.append(jid,attempt,token,'progress',{'message':'checkpoint skipped: '+str(error)[:500]})
-        except ValueError:pass
+     state=self.store.get(jid)['state']
+     if state not in ACTIVE:return
+     if now>=soft and state=='running':
+      try:self.finalize(jid,f'deadline-{jid}-{attempt}','budget_exhausted')
+      except ValueError:pass # state changed concurrently (finished/stopped/finalizing)
+     elif state=='finalizing':self._signal_finalize(jid)
+     if now-last>=m['policy']['checkpoint_seconds']:
+      last=now
+      # Checkpoints are best effort; a bad intermediate output must not kill the run.
+      try:self._publish(jid,m,attempt,token,final=False)
+      except Exception as error:
+       try:self.store.append(jid,attempt,token,'progress',{'message':'checkpoint skipped: '+str(error)[:500]})
+       except (ValueError,sqlite3.OperationalError):pass
+     failures=0
+     next_status=now+status_interval(now,soft,last,m['policy']['checkpoint_seconds'])
+    except sqlite3.OperationalError:
+     # "unable to open database file" and "database is locked" are transient.
+     # Retry with backoff. Only the hard deadline, or a non-store failure,
+     # force-stops the worker.
+     failures+=1
+     next_status=now+status_backoff(failures)
     except Exception as e:
      supervisor_errors.append(str(e));forced.set()
      try:self._stop_process(proc,cmd)
      except Exception as stop_error:supervisor_errors.append(str(stop_error))
      return
-  timer=threading.Thread(target=supervise,daemon=True);timer.start()
+  timer=threading.Thread(target=supervise,name=f'job-supervisor-{jid[:8]}',daemon=True);timer.start()
   try:
    if is_mvp(m) and j['state']=='finalizing':self._signal_finalize(jid)
    while True:
@@ -374,8 +420,12 @@ class Service:
   finally:
    done.set()
    # Keep ownership markers on unconfirmed cleanup, so a restart can retry it.
-   if self.store.get(jid)['error'] is None or 'cleanup unconfirmed' not in self.store.get(jid)['error']:
-    (self.path(jid)/'runtime.json').unlink(missing_ok=True)
+   # A transient open failure must still release the process slot, and must
+   # not drop the marker when cleanup could not be confirmed.
+   try:row=self.store.get(jid)
+   except sqlite3.OperationalError:confirmed=False
+   else:confirmed=row['error'] is None or 'cleanup unconfirmed' not in row['error']
+   if confirmed:(self.path(jid)/'runtime.json').unlink(missing_ok=True)
    with self.lock:self.procs.pop(jid,None);self.stopping.discard(jid)
 
  def _record(self,jid,attempt,token,kind,data):
